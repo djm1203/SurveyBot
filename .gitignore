@@ -1,0 +1,9 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+
+# Recorded keystroke profiles — keep folder, ignore actual data
+keystrokes/*.json

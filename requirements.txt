@@ -1,0 +1,5 @@
+camoufox[geoip]
+playwright
+playwright-stealth
+pynput
+pytest

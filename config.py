@@ -3,6 +3,13 @@ SURVEY_URL = "https://baylor.qualtrics.com/jfe/form/SV_6GagF9EpumzN06W"
 # How many times to submit the survey per run
 RUN_COUNT = 1
 
+# Email strategy for the bot:
+#   "fixed"  — always use BOT_EMAIL exactly (easy to filter, useful for testing)
+#   "prefix" — use BOT_EMAIL_PREFIX + random suffix (harder to block en masse)
+BOT_EMAIL_MODE = "prefix"
+BOT_EMAIL = "surveybot.test@gmail.com"       # used when mode = "fixed"
+BOT_EMAIL_PREFIX = "surveybot"               # used when mode = "prefix"
+
 # Human simulation timing constants (seconds)
 TIMING = {
     # Delay between individual answer selections

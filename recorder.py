@@ -71,13 +71,12 @@ class KeystrokeRecorder:
         if self._done:
             return False  # stop listener
 
-        key_name = _key_name(key)
-
-        # Escape cancels early
-        if key_name == "Escape":
+        # Escape or Enter stops recording
+        if key == keyboard.Key.esc or key == keyboard.Key.enter:
             self._done = True
             return False
 
+        key_name = _key_name(key)
         now = _now_ms()
         self._press_times[key_name] = now
         return None  # keep listening
@@ -107,6 +106,11 @@ class KeystrokeRecorder:
             "dwell_ms": round(dwell_ms, 2),
             "flight_ms": round(flight_ms, 2),
         })
+
+        # Live counter so the user knows recording is active
+        count = len(self._events)
+        print(f"\r  Keystrokes recorded: {count}   ", end="", flush=True)
+
         return None
 
     # -- Result assembly ----------------------------------------------------
@@ -208,7 +212,7 @@ def main() -> None:
     _print_sample_text()
 
     print("Type the text above as naturally as possible.")
-    print("Press Escape at any time to stop early.\n")
+    print("Press Enter or Escape when finished (typing is captured silently).\n")
 
     _countdown(3)
 

@@ -5,5 +5,10 @@ __pycache__/
 .pytest_cache/
 .env
 
+# IDE project files
+.idea/
+.vscode/
+*.iml
+
 # Recorded keystroke profiles — keep folder, ignore actual data
 keystrokes/*.json

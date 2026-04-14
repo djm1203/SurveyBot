@@ -45,7 +45,7 @@ _LOCALES = [
 ]
 
 # Firefox ESR + stable release range — keep plausible
-_FF_VERSIONS = list(range(115, 126))
+_FF_VERSIONS = list(range(128, 139))
 
 
 # ---------------------------------------------------------------------------

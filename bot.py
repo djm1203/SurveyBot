@@ -297,6 +297,18 @@ class SurveyBot:
                     if (label_el.is_visible(timeout=300)
                             and label_el.inner_text().strip() == choice):
                         self._human_click(label_el)
+                        try:
+                            for_attr = label_el.get_attribute("for")
+                            if for_attr:
+                                cb_input = self.page.locator(f"#{for_attr}")
+                                if cb_input.count() > 0:
+                                    cb_input.check(force=True)
+                            else:
+                                inner = label_el.locator("input[type='checkbox']")
+                                if inner.count() > 0:
+                                    inner.first.check(force=True)
+                        except Exception:
+                            pass
                         self._short_pause()
                         break
                 except Exception:
@@ -354,7 +366,11 @@ class SurveyBot:
                 frac = max(0.15, min(0.85, random.gauss(0.5, 0.15)))
                 x = box["x"] + box["width"] * frac
                 y = box["y"] + box["height"] / 2
-                self.page.mouse.move(x, y)
+                try:
+                    from mouse import bezier_move
+                    bezier_move(self.page, x, y)
+                except Exception:
+                    self.page.mouse.move(x, y)
                 self.page.wait_for_timeout(80)
                 self.page.mouse.click(x, y)
                 logger.info(f"[bot] Slider (click at {frac:.2f} via {sel})")
@@ -372,7 +388,11 @@ class SurveyBot:
                 frac = max(0.15, min(0.85, random.gauss(0.5, 0.15)))
                 x = box["x"] + box["width"] * frac
                 y = box["y"] + box["height"] * 0.75
-                self.page.mouse.move(x, y)
+                try:
+                    from mouse import bezier_move
+                    bezier_move(self.page, x, y)
+                except Exception:
+                    self.page.mouse.move(x, y)
                 self.page.wait_for_timeout(80)
                 self.page.mouse.click(x, y)
                 logger.info(f"[bot] Slider (container fallback click at {frac:.2f})")
@@ -419,7 +439,7 @@ class SurveyBot:
             return False
 
     def _question_label(self, container) -> str:
-        for sel in (".QuestionText", ".question-text", "label", "legend", "h2", "h3", "p"):
+        for sel in (".QuestionText", ".question-text", "legend", "h2", "h3", "p"):
             try:
                 el = container.locator(sel).first
                 if el.is_visible(timeout=300):
@@ -463,7 +483,7 @@ class SurveyBot:
         except (ImportError, NotImplementedError, AttributeError):
             delay = random.uniform(80, 180)
             try:
-                locator.type(text, delay=delay)
+                locator.press_sequentially(text, delay=delay)
             except Exception:
                 locator.fill(text)
 

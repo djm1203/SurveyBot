@@ -90,7 +90,7 @@ def random_email(first: str | None = None, last: str | None = None) -> str:
 
     if BOT_EMAIL_MODE == "prefix":
         domain = random.choice(EMAIL_DOMAINS)
-        suffix = random.randint(1000, 9999)
+        suffix = random.randint(10000, 99999)
         return f"{BOT_EMAIL_PREFIX}{suffix}@{domain}"
 
     # Fallback: derive from name hints (realistic random address)

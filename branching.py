@@ -73,13 +73,11 @@ def is_survey_complete(page) -> bool:
             page.wait_for_load_state("domcontentloaded", timeout=3_000)
         except Exception:
             pass
-        # Re-check after load settles
+        # Re-check after load settles — if still no buttons, we're done
         if not _element_visible(page, "#NextButton") and \
            not _element_visible(page, "#submitButton"):
-            # One final URL check
-            if "SE=" in page.url or "SurveyRetire" in page.url:
-                logger.info("[branching] Complete — end URL after button check")
-                return True
+            logger.info("[branching] Complete — no navigation buttons present")
+            return True
 
     return False
 

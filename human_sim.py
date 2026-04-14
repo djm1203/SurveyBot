@@ -260,21 +260,3 @@ def _sample_flight_ms() -> float:
 
     # Clamp to a sensible range — never negative, never so long it looks frozen
     return max(20.0, min(600.0, random.gauss(mean, std)))
-
-
-def _sample_dwell_ms() -> float:
-    """
-    Sample a key-hold duration (dwell time) from the active profile.
-
-    Dwell time = time between keydown and keyup for a single key.
-    Currently informational; Playwright's keyboard.type() doesn't expose
-    separate keydown/keyup timing, so dwell is baked into the event sequence.
-    """
-    if _active_profile:
-        mean = _active_profile["mean_dwell"]
-        std  = _active_profile["std_dwell"]
-    else:
-        mean = _FALLBACK_DWELL_MEAN
-        std  = _FALLBACK_DWELL_STD
-
-    return max(10.0, min(300.0, random.gauss(mean, std)))

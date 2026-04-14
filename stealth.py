@@ -62,6 +62,17 @@ class BrowserSession:
         try:
             self._launch_camoufox(fingerprint)
         except Exception as exc:
+            # If Camoufox partially initialised before throwing, its internal
+            # asyncio loop may still be running.  Call __exit__ to tear it
+            # down cleanly before we attempt the Playwright fallback —
+            # otherwise Playwright refuses to start ("inside asyncio loop").
+            if self._camoufox_cm is not None:
+                try:
+                    self._camoufox_cm.__exit__(None, None, None)
+                except Exception:
+                    pass
+                self._camoufox_cm = None
+
             logger.warning(
                 f"[stealth] Camoufox unavailable ({exc}), "
                 "falling back to Playwright + playwright-stealth"
@@ -72,18 +83,23 @@ class BrowserSession:
     def _launch_camoufox(self, fingerprint: dict) -> None:
         from camoufox.sync_api import Camoufox  # noqa: PLC0415
 
-        screen = fingerprint.get("screen", random.choice(_VIEWPORTS))
+        # Do NOT pass screen= as a plain dict — Camoufox forwards it to
+        # BrowserForge's generator which expects a typed constraint object,
+        # not a dict, and raises AttributeError: 'dict' has no 'is_set'.
+        # Omitting it lets Camoufox pick a realistic screen size automatically
+        # based on the os= parameter.
         self._camoufox_cm = Camoufox(
             headless=False,
-            screen={"width": screen["width"], "height": screen["height"]},
             os=_platform_to_camoufox_os(fingerprint.get("platform", "Win32")),
             locale=fingerprint.get("locale", "en-US"),
         )
         browser = self._camoufox_cm.__enter__()
         self._browser = browser
 
-        # Isolated context per run — defeats RelevantID duplicate detection
-        viewport = fingerprint.get("viewport", screen)
+        # Isolated context per run — defeats RelevantID duplicate detection.
+        # We still honour the viewport from our fingerprint so the page layout
+        # matches the screen size Camoufox reported.
+        viewport = fingerprint.get("viewport", random.choice(_VIEWPORTS))
         context = browser.new_context(
             viewport={"width": viewport["width"], "height": viewport["height"]},
             locale=fingerprint.get("locale", "en-US"),

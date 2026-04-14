@@ -67,8 +67,8 @@ logger = logging.getLogger(__name__)
 # Waiting between runs avoids triggering rate-limiting or submission-burst
 # detection on the survey platform.
 # ---------------------------------------------------------------------------
-_INTER_RUN_MIN_S = 5    # minimum seconds between runs
-_INTER_RUN_MAX_S = 15   # maximum seconds between runs
+_INTER_RUN_MIN_S = 3    # minimum seconds between runs
+_INTER_RUN_MAX_S = 8    # maximum seconds between runs
 
 
 # ---------------------------------------------------------------------------

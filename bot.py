@@ -112,7 +112,8 @@ class SurveyBot:
                 loc = self.page.locator(selector)
                 if loc.is_visible(timeout=1_000):
                     self._human_click(loc)
-                    self.page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+                    self.page.wait_for_load_state("load", timeout=timeout_ms)
+                    self._wait_for_qualtrics_transition()
                     logger.info(f"[bot] Next via selector: {selector}")
                     return
             except Exception:
@@ -124,7 +125,8 @@ class SurveyBot:
                 btn = self.page.get_by_role("button", name=name)
                 if btn.is_visible(timeout=500):
                     self._human_click(btn)
-                    self.page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+                    self.page.wait_for_load_state("load", timeout=timeout_ms)
+                    self._wait_for_qualtrics_transition()
                     logger.info(f"[bot] Next via role button '{name}'")
                     return
             except Exception:
@@ -134,6 +136,24 @@ class SurveyBot:
 
     def is_complete(self) -> bool:
         return branching.is_survey_complete(self.page)
+
+    def _wait_for_qualtrics_transition(self) -> None:
+        """
+        After clicking Next/Submit, Qualtrics sets class="LoadingPage" on
+        #SkinContent while it transitions to the next page or thank-you screen.
+        Waiting for that overlay to disappear ensures we don't try to fill
+        the old form DOM that's still present during the animation.
+        """
+        try:
+            overlay = self.page.locator("#SkinContent.LoadingPage")
+            # Wait up to 3 s for the overlay to appear (it's fast)
+            overlay.wait_for(state="visible", timeout=3_000)
+            # Then wait up to 20 s for it to disappear (page fully loaded)
+            overlay.wait_for(state="hidden", timeout=20_000)
+            logger.debug("[bot] Qualtrics transition complete")
+        except Exception:
+            # Overlay didn't appear or already gone — nothing to wait for
+            pass
 
     # ------------------------------------------------------------------
     # Question dispatcher
@@ -145,14 +165,20 @@ class SurveyBot:
             self.handle_text_input(container)
         elif self._has_visible(container, "textarea"):
             self.handle_textarea(container)
+        # Slider check must come BEFORE radio: Qualtrics slider containers
+        # often contain .ChoiceStructure divs that would trigger a false
+        # radio match if we checked radio first.
+        elif (self._has_visible(container, "input[type='range']")
+              or self._has_visible(container, "[role='slider']")
+              or self._has_visible(container,
+                  ".slider, .DragSlider, .QSlider, "
+                  ".QQSL-sliderLine, .QQSL-sliderHandle, .QL-slider")):
+            self.handle_slider(container)
         elif (self._has_visible(container, "input[type='radio']")
               or self._has_visible(container, ".radio, .RadioSelect, .ChoiceStructure")):
             self.handle_radio(container)
         elif self._has_visible(container, "input[type='checkbox']"):
             self.handle_checkbox(container)
-        elif (self._has_visible(container, "input[type='range']")
-              or self._has_visible(container, ".slider, .DragSlider, .QSlider, [role='slider']")):
-            self.handle_slider(container)
         elif self._has_visible(container, "select"):
             self.handle_dropdown(container)
         else:
@@ -182,19 +208,38 @@ class SurveyBot:
             inputs = container.locator("input")
         el = inputs.first
         el.click()
+        el.fill("")  # Clear any content from a previous loop attempt
         self._type_text(el, text)
         logger.info(f"[bot] Text ({field_type}): {text}")
 
     def handle_textarea(self, container) -> None:
-        from answers import random_first_name
-        text = (
-            f"I think it is a great program. "
-            f"{random_first_name()} agrees as well."
-        )
+        label = self._question_label(container)
+        field_type = classify_text_field(label)
+
+        if field_type in ("first_name", "last_name", "email"):
+            # Short-answer question that Qualtrics rendered as a <textarea>
+            text = answer_text_field(
+                field_type,
+                first_name=self._first_name,
+                last_name=self._last_name,
+            )
+            if field_type == "first_name":
+                self._first_name = text
+            elif field_type == "last_name":
+                self._last_name = text
+        else:
+            # Genuine open-ended text area — type a plausible sentence
+            from answers import random_first_name
+            text = (
+                f"I think it is a great program. "
+                f"{random_first_name()} agrees as well."
+            )
+
         el = container.locator("textarea").first
         el.click()
+        el.fill("")  # Clear any content from a previous loop attempt
         self._type_text(el, text)
-        logger.info(f"[bot] Textarea: '{text[:40]}...'")
+        logger.info(f"[bot] Textarea ({field_type}): '{text[:40]}'")
 
     def handle_radio(self, container) -> None:
         options = self._choice_labels(container)
@@ -211,7 +256,26 @@ class SurveyBot:
             try:
                 if (label_el.is_visible(timeout=300)
                         and label_el.inner_text().strip() == chosen):
-                    self._human_click(label_el)
+                    # Step 1: click the label (triggers Qualtrics JS)
+                    label_el.click()
+                    # Step 2: also .check() the associated radio input as a
+                    # belt-and-suspenders — Qualtrics custom radios sometimes
+                    # need the input itself to be checked, not just the label.
+                    try:
+                        for_attr = label_el.get_attribute("for")
+                        if for_attr:
+                            radio_input = self.page.locator(f"#{for_attr}")
+                            if radio_input.count() > 0:
+                                # force=True bypasses the hidden-input check —
+                                # Qualtrics typically hides the real <input>
+                                # and shows a styled span instead.
+                                radio_input.check(force=True)
+                        else:
+                            inner = label_el.locator("input[type='radio']")
+                            if inner.count() > 0:
+                                inner.first.check(force=True)
+                    except Exception:
+                        pass
                     logger.info(f"[bot] Radio: {chosen}")
                     return
             except Exception:
@@ -259,27 +323,62 @@ class SurveyBot:
             logger.info(f"[bot] Slider (range input): {value} [{min_val}–{max_val}]")
             return
 
-        # ── Strategy 2: Qualtrics custom slider — click on track ─────
-        track_selectors = [
-            ".slider-track", ".QSlider", ".DragSlider",
-            "[role='slider']", ".slider", "div.sliderTrack",
+        # ── Strategy 2: Qualtrics custom slider — mouse click on track ─
+        # Qualtrics requires a real mouse interaction (click or drag) to mark
+        # the slider question as "answered" in its response engine.
+        # Keyboard-only events after focus() move the handle visually but do
+        # NOT trigger Qualtrics's internal response-tracking JS.
+        #
+        # We scroll the container into view first (large-viewport safety),
+        # then click at a random position along the slider line/handle.
+        try:
+            container.scroll_into_view_if_needed()
+            self.page.wait_for_timeout(200)
+        except Exception:
+            pass
+
+        click_selectors = [
+            "[role='slider']",
+            ".QQSL-sliderLine", ".QQSL-sliderTrack", ".QQSL-sliderHandle",
+            ".slider-track", ".slider", ".DragSlider", ".QSlider",
         ]
-        for sel in track_selectors:
+        for sel in click_selectors:
             try:
                 loc = container.locator(sel)
                 if loc.count() == 0 or not loc.first.is_visible(timeout=400):
                     continue
+                loc.first.scroll_into_view_if_needed()
                 box = loc.first.bounding_box()
                 if not box:
                     continue
-                frac = max(0.05, min(0.95, random.gauss(0.5, 0.15)))
+                frac = max(0.15, min(0.85, random.gauss(0.5, 0.15)))
                 x = box["x"] + box["width"] * frac
                 y = box["y"] + box["height"] / 2
+                self.page.mouse.move(x, y)
+                self.page.wait_for_timeout(80)
                 self.page.mouse.click(x, y)
-                logger.info(f"[bot] Slider (click at {frac:.2f} of track)")
+                logger.info(f"[bot] Slider (click at {frac:.2f} via {sel})")
                 return
             except Exception:
                 continue
+
+        # ── Strategy 3: click in the lower portion of the question container ─
+        # Last-resort: click in the bottom 30% of the container where the
+        # slider track lives regardless of the specific selector.
+        try:
+            container.scroll_into_view_if_needed()
+            box = container.bounding_box()
+            if box:
+                frac = max(0.15, min(0.85, random.gauss(0.5, 0.15)))
+                x = box["x"] + box["width"] * frac
+                y = box["y"] + box["height"] * 0.75
+                self.page.mouse.move(x, y)
+                self.page.wait_for_timeout(80)
+                self.page.mouse.click(x, y)
+                logger.info(f"[bot] Slider (container fallback click at {frac:.2f})")
+                return
+        except Exception:
+            pass
 
         logger.warning("[bot] Slider: no usable slider element found")
 
@@ -330,7 +429,22 @@ class SurveyBot:
         return ""
 
     def _choice_labels(self, container) -> list[str]:
+        # Prefer labels with a 'for' attribute — these are always tied to
+        # an input element and are never question-text labels.
         labels = []
+        for el in container.locator("label[for]").all():
+            try:
+                if el.is_visible(timeout=300):
+                    text = el.inner_text().strip()
+                    if text:
+                        labels.append(text)
+            except Exception:
+                continue
+
+        if labels:
+            return labels
+
+        # Fallback: all visible labels (less precise — may include question text)
         for el in container.locator("label").all():
             try:
                 if el.is_visible(timeout=300):
@@ -366,12 +480,22 @@ class SurveyBot:
         self.page.wait_for_timeout(ms)
 
     def _reading_pause(self) -> None:
-        """Pause before hitting Next — scales with number of questions."""
+        """Pause before hitting Next — scales with number of questions.
+        Skipped entirely when the page has no visible questions (consent /
+        loading pages) so we don't waste seconds on empty pages."""
+        try:
+            containers = self._find_question_containers()
+            n = sum(1 for c in containers if c.is_visible())
+        except Exception:
+            n = 1
+
+        if n == 0:
+            return  # Nothing to "read" — don't pause
+
         try:
             import human_sim
-            human_sim.reading_pause(self.page)
+            human_sim.reading_pause(self.page, n_questions=n)
         except (ImportError, NotImplementedError, AttributeError):
-            n = len(self._find_question_containers())
-            base_ms = max(1_000, n * 1_500)
-            ms = max(500, int(random.gauss(base_ms, base_ms * 0.2)))
+            base_ms = max(500, n * 1_000)
+            ms = max(300, int(random.gauss(base_ms, base_ms * 0.2)))
             self.page.wait_for_timeout(ms)

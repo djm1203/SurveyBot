@@ -24,14 +24,14 @@ _OS_POOL = [
     ("linux",   "Linux x86_64", 0.09),
 ]
 
-# Common desktop screen resolutions
+# Common desktop screen resolutions — capped at 1440×900 so the browser
+# window fits on a normal laptop screen and large-viewport slider issues
+# don't surface.
 _RESOLUTIONS = [
-    (1920, 1080),
     (1366, 768),
     (1440, 900),
     (1280, 800),
     (1536, 864),
-    (2560, 1440),
     (1600, 900),
 ]
 

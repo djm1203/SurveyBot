@@ -13,17 +13,17 @@ BOT_EMAIL_PREFIX = "surveybot"               # used when mode = "prefix"
 # Human simulation timing constants (seconds)
 TIMING = {
     # Delay between individual answer selections
-    "min_action_delay": 0.4,
-    "max_action_delay": 1.2,
+    "min_action_delay": 0.15,
+    "max_action_delay": 0.5,
     # Gaussian params for click delay (mean, std)
-    "click_mean": 0.6,
-    "click_std": 0.18,
+    "click_mean": 0.3,
+    "click_std": 0.1,
     # Reading pause per question on a page (scales with question count)
-    "read_per_question_mean": 1.5,
-    "read_per_question_std": 0.4,
+    "read_per_question_mean": 0.6,
+    "read_per_question_std": 0.2,
     # Delay range before hitting Next button
-    "next_button_min": 0.8,
-    "next_button_max": 2.2,
+    "next_button_min": 0.4,
+    "next_button_max": 1.0,
     # Page load wait (max)
     "page_load_timeout_ms": 15_000,
 }

@@ -14,10 +14,18 @@ Usage (from main.py):
 import logging
 import random
 
+try:
+    # Playwright ≥ 1.20 exposes TargetClosedError directly
+    from playwright._impl._errors import TargetClosedError as _TargetClosedError
+except ImportError:
+    # Fallback: treat any Exception as potentially a closed-page error
+    _TargetClosedError = Exception  # type: ignore[assignment,misc]
+
 import branching
 from answers import (
     answer_text_field,
     classify_text_field,
+    random_free_text,
     random_slider_value,
     select_choice,
 )
@@ -82,17 +90,27 @@ class SurveyBot:
             pass  # Handled by is_survey_complete / next_page fallbacks
 
         page_num = 1
-        while not branching.is_survey_complete(self.page):
-            logger.info(f"[bot] ── Page {page_num} ──────────────────")
-            self.fill_page()
-            branching.handle_new_visible_questions(self.page, self)
-            self._reading_pause()
-            self.next_page()
-            page_num += 1
+        try:
+            while not branching.is_survey_complete(self.page):
+                logger.info(f"[bot] ── Page {page_num} ──────────────────")
+                self._wait_for_page_ready()
+                self._initial_page_scroll()
+                self.fill_page()
+                branching.handle_new_visible_questions(self.page, self)
+                self._reading_pause()
+                self.next_page()
+                page_num += 1
 
-            if page_num > 50:
-                logger.error("[bot] Safety limit: 50 pages exceeded — aborting")
-                break
+                if page_num > 50:
+                    logger.error("[bot] Safety limit: 50 pages exceeded — aborting")
+                    break
+        except _TargetClosedError:
+            # The page or browser was closed externally (survey platform detected the
+            # bot, Camoufox crashed, or the user closed the window).  Exit cleanly
+            # rather than hanging on subsequent Playwright calls that would each wait
+            # for internal timeouts before raising.
+            logger.warning("[bot] Page/browser closed mid-run — aborting cleanly")
+            return
 
         logger.info("[bot] Survey complete")
 
@@ -238,12 +256,9 @@ class SurveyBot:
             elif field_type == "last_name":
                 self._last_name = text
         else:
-            # Genuine open-ended text area — type a plausible sentence
-            from answers import random_first_name
-            text = (
-                f"I think it is a great program. "
-                f"{random_first_name()} agrees as well."
-            )
+            # Genuine open-ended text area — draw from the diverse free-text
+            # pool so no two submissions share the same response string.
+            text = random_free_text()
 
         el = container.locator("textarea").first
         el.click()
@@ -266,26 +281,10 @@ class SurveyBot:
             try:
                 if (label_el.is_visible(timeout=300)
                         and label_el.inner_text().strip() == chosen):
-                    # Step 1: click the label (triggers Qualtrics JS)
-                    label_el.click()
-                    # Step 2: also .check() the associated radio input as a
-                    # belt-and-suspenders — Qualtrics custom radios sometimes
-                    # need the input itself to be checked, not just the label.
-                    try:
-                        for_attr = label_el.get_attribute("for")
-                        if for_attr:
-                            radio_input = self.page.locator(f"#{for_attr}")
-                            if radio_input.count() > 0:
-                                # force=True bypasses the hidden-input check —
-                                # Qualtrics typically hides the real <input>
-                                # and shows a styled span instead.
-                                radio_input.check(force=True)
-                        else:
-                            inner = label_el.locator("input[type='radio']")
-                            if inner.count() > 0:
-                                inner.first.check(force=True)
-                    except Exception:
-                        pass
+                    # Click the label via bezier_click so pointer events fire
+                    # naturally — avoids the synthetic-interaction signal that
+                    # check(force=True) produces by bypassing pointer events.
+                    self._human_click(label_el)
                     logger.info(f"[bot] Radio: {chosen}")
                     return
             except Exception:
@@ -306,19 +305,9 @@ class SurveyBot:
                 try:
                     if (label_el.is_visible(timeout=300)
                             and label_el.inner_text().strip() == choice):
+                        # Human click fires the full pointer-event sequence;
+                        # no check(force=True) which would skip those events.
                         self._human_click(label_el)
-                        try:
-                            for_attr = label_el.get_attribute("for")
-                            if for_attr:
-                                cb_input = self.page.locator(f"#{for_attr}")
-                                if cb_input.count() > 0:
-                                    cb_input.check(force=True)
-                            else:
-                                inner = label_el.locator("input[type='checkbox']")
-                                if inner.count() > 0:
-                                    inner.first.check(force=True)
-                        except Exception:
-                            pass
                         self._short_pause()
                         break
                 except Exception:
@@ -327,13 +316,45 @@ class SurveyBot:
         logger.info(f"[bot] Checkbox: {chosen}")
 
     def handle_slider(self, container) -> None:
+        # Brief wait for Qualtrics JS to finish rendering a slider that just
+        # appeared via display-logic branching.  Without this, the slider track
+        # may have zero bounding-box dimensions or the role='slider' element may
+        # not yet be in the DOM.
+        self.page.wait_for_timeout(random.randint(300, 600))
+
         # ── Strategy 1: native <input type="range"> ──────────────────
+        # Click a position on the track proportional to the chosen value so
+        # the browser fires real pointer and change events — not DOM injection,
+        # which skips the pointer-event sequence detectors look for.
         range_inputs = container.locator("input[type='range']")
         if range_inputs.count() > 0:
             el = range_inputs.first
             min_val = int(el.get_attribute("min") or 0)
             max_val = int(el.get_attribute("max") or 10)
             value = random_slider_value(min_val, max_val)
+            try:
+                el.scroll_into_view_if_needed()
+                box = el.bounding_box()
+                if box and box["width"] > 0:
+                    frac = (value - min_val) / max(1, max_val - min_val)
+                    frac = max(0.05, min(0.95, frac))
+                    x = box["x"] + box["width"] * frac
+                    y = box["y"] + box["height"] / 2
+                    try:
+                        from mouse import bezier_move
+                        bezier_move(self.page, x, y)
+                    except Exception:
+                        self.page.mouse.move(x, y)
+                    self.page.wait_for_timeout(60)
+                    self.page.mouse.click(x, y)
+                    logger.info(
+                        f"[bot] Slider (range click at {frac:.2f}): "
+                        f"{value} [{min_val}–{max_val}]"
+                    )
+                    return
+            except Exception:
+                pass
+            # Fallback only if bounding_box unavailable
             el.evaluate(
                 "(el, val) => {"
                 "  el.value = val;"
@@ -342,7 +363,7 @@ class SurveyBot:
                 "}",
                 value,
             )
-            logger.info(f"[bot] Slider (range input): {value} [{min_val}–{max_val}]")
+            logger.info(f"[bot] Slider (range fallback inject): {value} [{min_val}–{max_val}]")
             return
 
         # ── Strategy 2: Qualtrics custom slider — mouse click on track ─
@@ -504,6 +525,46 @@ class SurveyBot:
         except (ImportError, NotImplementedError, AttributeError):
             self._short_pause()
             locator.click()
+
+    def _wait_for_page_ready(self) -> None:
+        """
+        Block until the Qualtrics LoadingPage overlay is gone and at least one
+        interactive element is present.
+
+        This guard is necessary because _wait_for_qualtrics_transition() in
+        next_page() only waits for the overlay if it arrives within a 3-second
+        window.  When the server is slow the overlay appears later, causing
+        fill_page() to attempt clicks while pointer events are still blocked.
+        Calling this at the top of each page loop makes the guard unconditional.
+        """
+        try:
+            overlay = self.page.locator("#SkinContent.LoadingPage")
+            # wait_for with state="visible" returns immediately if already visible,
+            # or raises TimeoutError after 2 s if it never appears — either way
+            # we then wait for hidden.
+            try:
+                overlay.wait_for(state="visible", timeout=2_000)
+            except Exception:
+                pass  # Overlay never appeared — page is already ready
+            overlay.wait_for(state="hidden", timeout=20_000)
+        except Exception:
+            pass
+        # Ensure at least one interactive element is rendered before proceeding
+        try:
+            self.page.wait_for_selector(
+                "#NextButton, #submitButton, div.QuestionOuter, [data-qid]",
+                timeout=8_000,
+            )
+        except Exception:
+            pass
+
+    def _initial_page_scroll(self) -> None:
+        """Scroll the page to simulate a user reading before answering."""
+        try:
+            import human_sim
+            human_sim.simulate_page_scroll(self.page)
+        except Exception:
+            pass
 
     def _short_pause(self) -> None:
         ms = max(100, int(random.gauss(400, 100)))

@@ -78,11 +78,11 @@ def generate_fingerprint() -> dict:
 def _from_browserforge() -> dict:
     from browserforge.fingerprints import FingerprintGenerator  # noqa: PLC0415
 
+    # BrowserForge ≥ 1.0 accepts plain strings, not ("name", "version") tuples.
+    # Pass "firefox" directly; omit device/locale as they vary by version.
     gen = FingerprintGenerator(
-        browser=[("firefox", "*")],
+        browser="firefox",
         os=["windows", "macos"],
-        device="desktop",
-        locale="en-US",
     )
     fp = gen.generate()
 

@@ -11,19 +11,23 @@ BOT_EMAIL = "surveybot.test@gmail.com"       # used when mode = "fixed"
 BOT_EMAIL_PREFIX = "surveybot"               # used when mode = "prefix"
 
 # Human simulation timing constants (seconds)
+# These values produce a realistic 3–6 minute survey completion time.
+# Lower values were flagged by behavioral biometric detection (completion
+# time and inter-action variance are both scored signals).
 TIMING = {
-    # Delay between individual answer selections
-    "min_action_delay": 0.15,
-    "max_action_delay": 0.5,
-    # Gaussian params for click delay (mean, std)
-    "click_mean": 0.3,
-    "click_std": 0.1,
-    # Reading pause per question on a page (scales with question count)
-    "read_per_question_mean": 0.6,
-    "read_per_question_std": 0.2,
-    # Delay range before hitting Next button
-    "next_button_min": 0.4,
-    "next_button_max": 1.0,
+    # Delay between individual answer selections (e.g. checkbox to next radio)
+    "min_action_delay": 0.5,
+    "max_action_delay": 2.0,
+    # Gaussian params for pre-click pause (hand-movement + decision time)
+    "click_mean": 0.6,
+    "click_std": 0.15,
+    # Reading pause per question on a page (scales linearly with question count)
+    # 3 s/question × 3 questions = ~9 s reading time before answering
+    "read_per_question_mean": 3.0,
+    "read_per_question_std": 0.9,
+    # Extra pause before hitting Next after all questions are answered
+    "next_button_min": 1.2,
+    "next_button_max": 3.0,
     # Page load wait (max)
     "page_load_timeout_ms": 15_000,
 }

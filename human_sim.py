@@ -53,11 +53,13 @@ _active_profile: dict | None = None
 # Directory where recorder.py saves JSON profiles
 _KEYSTROKES_DIR = Path(__file__).parent / "keystrokes"
 
-# Fallback timing (ms) when no profile is loaded
+# Fallback timing (ms) when no profile is loaded.
+# _FALLBACK_FLIGHT_STD must stay above 100 ms — behavioral biometric detectors
+# flag inter-keystroke σ < 100 ms as a strong bot signal.
 _FALLBACK_DWELL_MEAN  = 80
-_FALLBACK_DWELL_STD   = 20
+_FALLBACK_DWELL_STD   = 25
 _FALLBACK_FLIGHT_MEAN = 130
-_FALLBACK_FLIGHT_STD  = 40
+_FALLBACK_FLIGHT_STD  = 100
 
 
 # ---------------------------------------------------------------------------
@@ -235,6 +237,37 @@ def short_action_pause(page) -> None:
         TIMING["max_action_delay"] * 1000,
     )
     page.wait_for_timeout(int(ms))
+
+
+def simulate_page_scroll(page) -> None:
+    """
+    Fire realistic scroll events to simulate a user reading the page.
+
+    Real users scroll to see the full question set before answering.
+    Systems that collect scroll telemetry (DataDome, reCAPTCHA v3) treat
+    zero scroll events as a bot signal.
+
+    Behaviour:
+      • 2–6 wheel events per call
+      • 78 % scroll down, 22 % scroll up (natural reading pattern)
+      • Delta drawn from Uniform(60, 300) px — matches typical trackpad/scroll wheel
+      • Gaussian delay between events centred at 380 ms
+      • Mouse position randomised across the viewport width on each event
+    """
+    n_scrolls = random.randint(2, 6)
+    for _ in range(n_scrolls):
+        direction = 1 if random.random() < 0.78 else -1
+        delta = random.randint(60, 300) * direction
+        # page.mouse.wheel takes (delta_x, delta_y) — move cursor slightly
+        # each time so the page doesn't snap the scroll anchor
+        try:
+            x = random.randint(200, 900)
+            y = random.randint(150, 500)
+            page.mouse.move(x, y)
+            page.mouse.wheel(0, delta)
+        except Exception:
+            pass
+        page.wait_for_timeout(max(80, int(random.gauss(380, 100))))
 
 
 # ---------------------------------------------------------------------------

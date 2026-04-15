@@ -38,6 +38,7 @@ import logging
 import random
 import sys
 import time
+from pathlib import Path
 
 import human_sim
 import mouse
@@ -64,11 +65,28 @@ logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Inter-run delay
-# Waiting between runs avoids triggering rate-limiting or submission-burst
-# detection on the survey platform.
+# Clustered submissions from one session are a strong bot signal even when
+# individual browser contexts look clean.  A 30–90 s gap between runs spreads
+# the submission pattern across time and avoids triggering burst-detection.
 # ---------------------------------------------------------------------------
-_INTER_RUN_MIN_S = 3    # minimum seconds between runs
-_INTER_RUN_MAX_S = 8    # maximum seconds between runs
+_INTER_RUN_MIN_S = 30    # minimum seconds between runs
+_INTER_RUN_MAX_S = 90    # maximum seconds between runs
+
+# Directory where warm_profile.py saves browser state snapshots
+_PROFILES_DIR = Path(__file__).parent / "profiles"
+
+
+def _find_warmed_profile() -> "str | None":
+    """
+    Return the path to the most recently saved warmed profile, or None.
+
+    warm_profile.py saves files as  profiles/warmed_profile_YYYYMMDD_HHMMSS.json
+    Sorting in reverse order gives us the newest one automatically.
+    """
+    if not _PROFILES_DIR.exists():
+        return None
+    profiles = sorted(_PROFILES_DIR.glob("warmed_profile_*.json"), reverse=True)
+    return str(profiles[0]) if profiles else None
 
 
 # ---------------------------------------------------------------------------
@@ -161,8 +179,8 @@ def run_once(run_number: int, total_runs: int, url: str, email_mode: str) -> boo
     logger.info(f"{'='*55}")
 
     # ── Step 1: generate a unique fingerprint for this run ───────────────
-    # A new fingerprint = a new "person" from the perspective of RelevantID
-    # and browser fingerprint databases.
+    # A new fingerprint = a new "person" from the perspective of
+    # Q_DuplicateRespondent and browser fingerprint databases.
     fingerprint = generate_fingerprint()
     logger.info(
         f"[main] Fingerprint: {fingerprint.get('platform')} | "
@@ -178,20 +196,34 @@ def run_once(run_number: int, total_runs: int, url: str, email_mode: str) -> boo
 
     # ── Step 3: reset mouse tracking position ────────────────────────────
     # Pretend the cursor starts near the center of the viewport so the
-    # first Bezier move has a plausible start point.
+    # first WindMouse move has a plausible start point.
     vp = fingerprint["viewport"]
     mouse.reset_position(
         x=vp["width"]  / 2 + random.gauss(0, 20),
         y=vp["height"] / 2 + random.gauss(0, 20),
     )
 
-    # ── Step 4: launch browser ───────────────────────────────────────────
+    # ── Step 4: resolve warmed browser profile ───────────────────────────
+    # A pre-warmed profile carries Google cookies + browsing history so
+    # reCAPTCHA v3 sees a real-looking session rather than a zero-history
+    # fresh context (which scores 0.1–0.3 regardless of behavioral quality).
+    # Run warm_profile.py once to create a profile before the first bot run.
+    storage_state = _find_warmed_profile()
+    if storage_state:
+        logger.info(f"[main] Warmed profile: {Path(storage_state).name}")
+    else:
+        logger.warning(
+            "[main] No warmed profile found — reCAPTCHA v3 scores will be low. "
+            "Run  python warm_profile.py  to create one."
+        )
+
+    # ── Step 5: launch browser ───────────────────────────────────────────
     # BrowserSession is a context manager — browser is guaranteed to close
     # even if the bot raises an exception.
-    with launch_browser(fingerprint) as session:
+    with launch_browser(fingerprint, storage_state=storage_state) as session:
         logger.info(f"[main] Browser mode: {session.mode}")
 
-        # ── Step 5: run the bot ──────────────────────────────────────────
+        # ── Step 6: run the bot ──────────────────────────────────────────
         # Pass TIMING from config so bot.py can use page_load_timeout_ms
         # without importing config directly (keeps bot.py portable).
         bot = SurveyBot(

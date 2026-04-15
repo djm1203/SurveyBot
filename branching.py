@@ -73,11 +73,15 @@ def is_survey_complete(page) -> bool:
             page.wait_for_load_state("domcontentloaded", timeout=3_000)
         except Exception:
             pass
-        # Re-check after load settles — if still no buttons, we're done
+        # Re-check after load settles
         if not _element_visible(page, "#NextButton") and \
            not _element_visible(page, "#submitButton"):
-            logger.info("[branching] Complete — no navigation buttons present")
-            return True
+            # Require URL confirmation — prevents false positives on slow
+            # initial page loads before the Qualtrics SPA renders buttons.
+            # (Custom thank-you pages are caught by the body-text scan above.)
+            if "SE=" in page.url or "SurveyRetire" in page.url:
+                logger.info("[branching] Complete — end URL after button check")
+                return True
 
     return False
 

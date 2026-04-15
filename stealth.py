@@ -88,18 +88,21 @@ class BrowserSession:
         # not a dict, and raises AttributeError: 'dict' has no 'is_set'.
         # Omitting it lets Camoufox pick a realistic screen size automatically
         # based on the os= parameter.
+        #
+        # window=(w, h) sets the actual OS window size so the browser fits on
+        # the user's screen.  Without this, Camoufox picks a window based on
+        # BrowserForge's screen fingerprint which can be 1920×1080 or larger.
+        viewport = fingerprint.get("viewport", random.choice(_VIEWPORTS))
         self._camoufox_cm = Camoufox(
             headless=False,
             os=_platform_to_camoufox_os(fingerprint.get("platform", "Win32")),
             locale=fingerprint.get("locale", "en-US"),
+            window=(viewport["width"], viewport["height"]),
         )
         browser = self._camoufox_cm.__enter__()
         self._browser = browser
 
         # Isolated context per run — defeats RelevantID duplicate detection.
-        # We still honour the viewport from our fingerprint so the page layout
-        # matches the screen size Camoufox reported.
-        viewport = fingerprint.get("viewport", random.choice(_VIEWPORTS))
         context = browser.new_context(
             viewport={"width": viewport["width"], "height": viewport["height"]},
             locale=fingerprint.get("locale", "en-US"),

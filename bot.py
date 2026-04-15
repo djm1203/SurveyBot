@@ -69,7 +69,17 @@ class SurveyBot:
         url = self.config.get("survey_url") or self.config.get("SURVEY_URL", "")
         logger.info(f"[bot] Navigating to {url}")
         self.page.goto(url)
-        self.page.wait_for_load_state("domcontentloaded")
+        self.page.wait_for_load_state("load")
+        # Qualtrics is a JS SPA — wait for the first interactive element to
+        # render before entering the main loop.  Without this, the loop spins
+        # many times in ~2 s while the page is still blank.
+        try:
+            self.page.wait_for_selector(
+                "#NextButton, div.QuestionOuter, [data-qid]",
+                timeout=15_000,
+            )
+        except Exception:
+            pass  # Handled by is_survey_complete / next_page fallbacks
 
         page_num = 1
         while not branching.is_survey_complete(self.page):
@@ -510,7 +520,16 @@ class SurveyBot:
             n = 1
 
         if n == 0:
-            return  # Nothing to "read" — don't pause
+            # No containers yet — Qualtrics SPA may still be rendering.
+            # Wait for content rather than spinning immediately back to the loop.
+            try:
+                self.page.wait_for_selector(
+                    "#NextButton, #submitButton, div.QuestionOuter",
+                    timeout=5_000,
+                )
+            except Exception:
+                self.page.wait_for_timeout(500)
+            return
 
         try:
             import human_sim

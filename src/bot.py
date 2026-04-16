@@ -101,8 +101,8 @@ class SurveyBot:
                 self.next_page()
                 page_num += 1
 
-                if page_num > 50:
-                    logger.error("[bot] Safety limit: 50 pages exceeded — aborting")
+                if page_num > 6:
+                    logger.error("[bot] Safety limit: 6 pages exceeded — aborting")
                     break
         except _TargetClosedError:
             # The page or browser was closed externally (survey platform detected the

@@ -23,6 +23,7 @@ _QUESTION_SELECTORS = [
 ]
 
 _COMPLETION_PHRASES = [
+    # Normal completion
     "thank you",
     "your response has been recorded",
     "survey is now complete",
@@ -31,6 +32,19 @@ _COMPLETION_PHRASES = [
     "submission complete",
     "response recorded",
     "your survey has been submitted",
+    # Qualtrics ballot-box stuffing / duplicate detection messages
+    "you have already taken this survey",
+    "you have already completed this survey",
+    "this survey has already been taken",
+    "already responded",
+    "duplicate response",
+    # Session expiry / quota / closed states
+    "this survey is no longer accepting responses",
+    "survey is closed",
+    "quota is full",
+    "no longer available",
+    "sorry, you are not eligible",
+    "thank you for your interest",
 ]
 
 

@@ -21,8 +21,8 @@ except ImportError:
     # Fallback: treat any Exception as potentially a closed-page error
     _TargetClosedError = Exception  # type: ignore[assignment,misc]
 
-import branching
-from answers import (
+from . import branching
+from .answers import (
     answer_text_field,
     classify_text_field,
     random_free_text,
@@ -253,8 +253,10 @@ class SurveyBot:
         if inputs.count() == 0:
             inputs = container.locator("input")
         el = inputs.first
-        el.click()
-        el.fill("")  # Clear any content from a previous loop attempt
+        self._human_click(el)
+        self.page.keyboard.press("Control+a")
+        self.page.wait_for_timeout(random.randint(40, 100))
+        self.page.keyboard.press("Delete")
         self._type_text(el, text)
         logger.info(f"[bot] Text ({field_type}): {text}")
 
@@ -279,8 +281,10 @@ class SurveyBot:
             text = random_free_text()
 
         el = container.locator("textarea").first
-        el.click()
-        el.fill("")  # Clear any content from a previous loop attempt
+        self._human_click(el)
+        self.page.keyboard.press("Control+a")
+        self.page.wait_for_timeout(random.randint(40, 100))
+        self.page.keyboard.press("Delete")
         self._type_text(el, text)
         logger.info(f"[bot] Textarea ({field_type}): '{text[:40]}'")
 
@@ -359,7 +363,7 @@ class SurveyBot:
                     x = box["x"] + box["width"] * frac
                     y = box["y"] + box["height"] / 2
                     try:
-                        from mouse import bezier_move
+                        from .mouse import bezier_move
                         bezier_move(self.page, x, y)
                     except Exception:
                         self.page.mouse.move(x, y)
@@ -527,7 +531,7 @@ class SurveyBot:
     def _type_text(self, locator, text: str) -> None:
         """Type text with human-like delays. Falls back if human_sim not ready."""
         try:
-            import human_sim
+            from . import human_sim
             human_sim.type_with_profile(self.page, locator, text)
         except (ImportError, NotImplementedError, AttributeError):
             delay = random.uniform(80, 180)
@@ -545,7 +549,7 @@ class SurveyBot:
 
     def _human_click(self, locator) -> None:
         try:
-            import human_sim
+            from . import human_sim
             human_sim.human_click(locator)
         except (ImportError, NotImplementedError, AttributeError):
             self._short_pause()
@@ -586,7 +590,7 @@ class SurveyBot:
     def _initial_page_scroll(self) -> None:
         """Scroll the page to simulate a user reading before answering."""
         try:
-            import human_sim
+            from . import human_sim
             human_sim.simulate_page_scroll(self.page)
         except Exception:
             pass
@@ -618,7 +622,7 @@ class SurveyBot:
             return
 
         try:
-            import human_sim
+            from . import human_sim
             human_sim.reading_pause(self.page, n_questions=n)
         except (ImportError, NotImplementedError, AttributeError):
             base_ms = max(500, n * 1_000)

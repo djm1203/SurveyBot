@@ -8,7 +8,7 @@ This module only deals with *what* to answer, never *how* to interact with the p
 import random
 import re
 
-from config import BOT_EMAIL, BOT_EMAIL_MODE, BOT_EMAIL_PREFIX
+from .config import BOT_EMAIL, BOT_EMAIL_MODE, BOT_EMAIL_PREFIX
 
 # ---------------------------------------------------------------------------
 # Data pools

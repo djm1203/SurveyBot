@@ -40,7 +40,7 @@ import logging
 import random
 from pathlib import Path
 
-from config import TIMING
+from .config import TIMING
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 _active_profile: dict | None = None
 
 # Directory where recorder.py saves JSON profiles
-_KEYSTROKES_DIR = Path(__file__).parent / "keystrokes"
+_KEYSTROKES_DIR = Path(__file__).parent.parent / "keystrokes"
 
 # Fallback timing (ms) when no profile is loaded.
 # _FALLBACK_FLIGHT_STD must stay above 100 ms — behavioral biometric detectors
@@ -144,8 +144,6 @@ def type_with_profile(page, locator, text: str) -> None:
     locator : Playwright Locator — the input element to type into
     text    : The string to type
     """
-    locator.click()  # Focus the element before typing
-
     for char in text:
         flight_ms = _sample_flight_ms()
 
@@ -198,7 +196,7 @@ def human_click(locator) -> None:
 
     # Attempt Bezier curve movement for more natural mouse path
     try:
-        from mouse import bezier_click
+        from .mouse import bezier_click
         bezier_click(locator.page, locator)
     except Exception:
         locator.click()

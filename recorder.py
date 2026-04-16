@@ -18,7 +18,7 @@ from statistics import mean, stdev
 
 from pynput import keyboard
 
-from config import SAMPLE_TEXT
+from src.config import SAMPLE_TEXT
 
 KEYSTROKES_DIR = Path(__file__).parent / "keystrokes"
 

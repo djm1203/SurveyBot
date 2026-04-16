@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "WebSearch",
-      "Bash(ls c:/Users/dmart/Documents/Personal/Github/SurveyBot/*.py)"
-    ]
-  }
-}

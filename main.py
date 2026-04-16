@@ -40,12 +40,11 @@ import sys
 import time
 from pathlib import Path
 
-import human_sim
-import mouse
-from bot import SurveyBot
-from config import BOT_EMAIL, BOT_EMAIL_MODE, BOT_EMAIL_PREFIX, RUN_COUNT, SURVEY_URL, TIMING
-from fingerprint import generate_fingerprint
-from stealth import launch_browser
+from src import human_sim, mouse
+from src.bot import SurveyBot
+from src.config import BOT_EMAIL, BOT_EMAIL_MODE, BOT_EMAIL_PREFIX, RUN_COUNT, SURVEY_URL, TIMING
+from src.fingerprint import generate_fingerprint
+from src.stealth import launch_browser
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -78,15 +77,28 @@ _PROFILES_DIR = Path(__file__).parent / "profiles"
 
 def _find_warmed_profile() -> "str | None":
     """
-    Return the path to the most recently saved warmed profile, or None.
+    Randomly pick from the 3 most recent warmed profiles, or None if none exist.
+
+    Using a random recent profile rather than always the newest means:
+      - Each run uses a different NID / VISITOR_INFO cookie value, reducing
+        any cross-submission correlation reCAPTCHA could detect.
+      - A single stale profile doesn't silently degrade every run — older
+        candidates act as fallbacks while the newest is still fresh.
 
     warm_profile.py saves files as  profiles/warmed_profile_YYYYMMDD_HHMMSS.json
-    Sorting in reverse order gives us the newest one automatically.
     """
     if not _PROFILES_DIR.exists():
         return None
     profiles = sorted(_PROFILES_DIR.glob("warmed_profile_*.json"), reverse=True)
-    return str(profiles[0]) if profiles else None
+    if not profiles:
+        return None
+    candidates = profiles[:3]
+    chosen = random.choice(candidates)
+    logger.info(
+        f"[main] Selected profile {chosen.name} "
+        f"(from {len(candidates)} candidate(s))"
+    )
+    return str(chosen)
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +235,16 @@ def run_once(run_number: int, total_runs: int, url: str, email_mode: str) -> boo
     with launch_browser(fingerprint, storage_state=storage_state) as session:
         logger.info(f"[main] Browser mode: {session.mode}")
 
+        # Camoufox patches navigator.webdriver and canvas/WebGL fingerprints
+        # at the C++ level.  Falling back to plain Playwright means those
+        # patches are absent — the run will almost certainly be flagged.
+        if session.mode != "camoufox":
+            logger.error(
+                f"[main] Browser launched in fallback mode ({session.mode}) — "
+                "navigator.webdriver will be detectable.  Aborting run."
+            )
+            return False
+
         # ── Step 6: run the bot ──────────────────────────────────────────
         # Pass TIMING from config so bot.py can use page_load_timeout_ms
         # without importing config directly (keeps bot.py portable).
@@ -262,8 +284,8 @@ def main() -> None:
 
     # answers.py binds BOT_EMAIL_MODE at import time via `from config import ...`
     # so patching config alone has no effect — patch answers directly too.
-    import config as _cfg_module
-    import answers as _ans_module
+    import src.config as _cfg_module
+    import src.answers as _ans_module
     _cfg_module.BOT_EMAIL_MODE = cfg["email_mode"]
     _ans_module.BOT_EMAIL_MODE = cfg["email_mode"]
 

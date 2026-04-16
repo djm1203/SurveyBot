@@ -7,7 +7,7 @@ Run with:  pytest tests/
 
 import re
 import pytest
-from answers import (
+from src.answers import (
     FIRST_NAMES,
     LAST_NAMES,
     EMAIL_DOMAINS,
@@ -60,7 +60,7 @@ def test_email_prefix_mode():
     # Explicitly test "prefix" mode — local part starts with BOT_EMAIL_PREFIX.
     # Must patch answers.BOT_EMAIL_MODE (the already-imported name), not
     # config.BOT_EMAIL_MODE, because answers.py binds the value at import time.
-    import answers as _ans
+    import src.answers as _ans
     original = _ans.BOT_EMAIL_MODE
     try:
         _ans.BOT_EMAIL_MODE = "prefix"
@@ -114,7 +114,7 @@ def test_answer_email_valid():
 
 def test_answer_email_prefix_mode_uses_bot_prefix():
     # Explicitly test "prefix" mode — patch answers module, not config module.
-    import answers as _ans
+    import src.answers as _ans
     original = _ans.BOT_EMAIL_MODE
     try:
         _ans.BOT_EMAIL_MODE = "prefix"

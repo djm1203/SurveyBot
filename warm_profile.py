@@ -58,27 +58,40 @@ _PROFILES_DIR = Path(__file__).parent / "profiles"
 # Each entry is a tuple of:
 #   (url, min_dwell_s, max_dwell_s, description)
 #
-# The sites are chosen to:
-#   • Get Google NID / CONSENT cookies without requiring a login
-#   • Build up realistic referral chains across unrelated domains
-#   • Simulate a normal mid-day browsing session
+# CORE sites are always visited — they establish Google NID, CONSENT, and
+# YouTube VISITOR_INFO cookies which are what reCAPTCHA v3 actually checks.
+#
+# FILLER sites are sampled randomly each run (3 of 8) so each saved profile
+# has a different browsing history.  This matters for two reasons:
+#   1. Cookie staleness — profiles generated days apart have different NID
+#      values, so the bot isn't cloning the same session across runs.
+#   2. Cross-submission correlation — different cookie histories reduce the
+#      chance that reCAPTCHA links multiple profiles to the same source.
 # ---------------------------------------------------------------------------
-_VISIT_SEQUENCE = [
+_CORE_SITES = [
     # Google homepage — establishes NID, CONSENT, 1P_JAR cookies
-    ("https://www.google.com",           5, 10, "Google homepage"),
-    # Simple Google search (no login required, sets search-session cookies)
-    ("https://www.google.com/search?q=weather+forecast+today", 6, 12, "Google search"),
-    # Wikipedia — trusted referral, no tracking
-    ("https://en.wikipedia.org/wiki/Main_Page",                 8, 18, "Wikipedia"),
-    # News site — common in mid-day browsing patterns
-    ("https://apnews.com",                                       7, 15, "AP News"),
-    # Return to Google — reinforces the session cookie
-    ("https://www.google.com",                                   4,  8, "Google (return)"),
-    # YouTube — sets more Google cookies (PREF, VISITOR_INFO1_LIVE, etc.)
-    ("https://www.youtube.com",                                  6, 14, "YouTube"),
-    # One more general-interest site to pad history
-    ("https://www.bbc.com",                                      5, 12, "BBC"),
+    ("https://www.google.com",                                    5, 10, "Google homepage"),
+    # Google search — sets search-session cookies
+    ("https://www.google.com/search?q=baylor+university",         6, 12, "Google search"),
+    # Return visit — reinforces the session cookie
+    ("https://www.google.com",                                    4,  8, "Google (return)"),
+    # YouTube — sets PREF, VISITOR_INFO1_LIVE, and more Google cookies
+    ("https://www.youtube.com",                                   6, 14, "YouTube"),
 ]
+
+_FILLER_POOL = [
+    ("https://en.wikipedia.org/wiki/Main_Page",  8, 18, "Wikipedia"),
+    ("https://apnews.com",                        7, 15, "AP News"),
+    ("https://www.bbc.com",                       5, 12, "BBC"),
+    ("https://stackoverflow.com",                 5, 11, "Stack Overflow"),
+    ("https://github.com",                        4, 10, "GitHub"),
+    ("https://www.reddit.com",                    5, 12, "Reddit"),
+    ("https://www.weather.gov",                   4,  9, "Weather.gov"),
+    ("https://www.espn.com",                      4, 10, "ESPN"),
+]
+
+# Build sequence fresh each run — 3 random fillers appended after core sites
+_VISIT_SEQUENCE = _CORE_SITES + random.sample(_FILLER_POOL, k=3)
 
 
 # ---------------------------------------------------------------------------

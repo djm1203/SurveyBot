@@ -76,8 +76,9 @@ class SurveyBot:
         """Navigate to the survey and fill every page until complete."""
         url = self.config.get("survey_url") or self.config.get("SURVEY_URL", "")
         logger.info(f"[bot] Navigating to {url}")
-        self.page.goto(url)
-        self.page.wait_for_load_state("load")
+        timeout_ms = self.config.get("TIMING", {}).get("page_load_timeout_ms", 60_000)
+        self.page.goto(url, timeout=max(timeout_ms, 60_000))
+        self.page.wait_for_load_state("load", timeout=max(timeout_ms, 60_000))
         # Qualtrics is a JS SPA — wait for the first interactive element to
         # render before entering the main loop.  Without this, the loop spins
         # many times in ~2 s while the page is still blank.

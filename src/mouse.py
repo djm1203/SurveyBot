@@ -123,7 +123,7 @@ def _windmouse(
     max_step: float = 12.0,
     min_wait_ms: int = 1,
     max_wait_ms: int = 6,
-    max_iterations: int = 5_000,
+    max_iterations: int = 300,
 ) -> None:
     """
     Move the cursor from (start_x, start_y) to (end_x, end_y) using a
@@ -132,8 +132,10 @@ def _windmouse(
     gravity        — attraction toward the target per step
     wind           — maximum random lateral turbulence per step
     max_step       — maximum pixels moved per step (controls speed)
-    max_iterations — hard safety cap; prevents any theoretical infinite loop
-                     and allows fast exit if the page closes mid-move.
+    max_iterations — hard safety cap; prevents infinite loops and keeps
+                     move time bounded.  300 covers long-distance moves
+                     (~200-400 events per docs); 5000 caused 6-minute hangs
+                     in Camoufox because each page.mouse.move() takes ~70ms.
     """
     x, y = float(start_x), float(start_y)
     wind_x = wind_y = 0.0

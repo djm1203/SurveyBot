@@ -45,6 +45,7 @@ from src.bot import SurveyBot
 from src.config import BOT_EMAIL, BOT_EMAIL_MODE, BOT_EMAIL_PREFIX, RUN_COUNT, SURVEY_URL, TIMING
 from src.fingerprint import generate_fingerprint
 from src.stealth import launch_browser
+from src.xhr_capture import attach_capture, log_run_verdict
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -245,7 +246,35 @@ def run_once(run_number: int, total_runs: int, url: str, email_mode: str) -> boo
             )
             return False
 
-        # ── Step 6: run the bot ──────────────────────────────────────────
+        # Verify the warmed profile actually loaded its cookies.
+        # An empty list here means storage_state wasn't applied and every
+        # run is a cold context — reCAPTCHA v3 will score it ~0.1.
+        try:
+            all_cookies = session.page.context.cookies()
+            google_names = [
+                c["name"] for c in all_cookies
+                if "google" in c.get("domain", "").lower()
+            ]
+            if google_names:
+                logger.info(f"[main] Google cookies loaded: {google_names}")
+            else:
+                logger.warning(
+                    "[main] No Google cookies found in context — "
+                    "storage_state may not have loaded; reCAPTCHA v3 will score low"
+                )
+        except Exception as exc:
+            logger.debug(f"[main] Cookie check failed: {exc}")
+
+        # ── Step 6: attach XHR capture BEFORE goto ───────────────────────
+        # Registers a response listener that intercepts every Qualtrics POST
+        # and extracts bot_score, Q_RecaptchaScore, biometric fields, etc.
+        # Must be called before page.goto() so the /start response is caught.
+        xhr_results = attach_capture(
+            session.page,
+            run_label=f"run{run_number:02d}",
+        )
+
+        # ── Step 7: run the bot ──────────────────────────────────────────
         # Pass TIMING from config so bot.py can use page_load_timeout_ms
         # without importing config directly (keeps bot.py portable).
         bot = SurveyBot(
@@ -268,10 +297,15 @@ def run_once(run_number: int, total_runs: int, url: str, email_mode: str) -> boo
                     f"[main] Completed in {elapsed:.1f}s — below 30s threshold; "
                     "increase TIMING values or blue team may filter on Q_TotalDuration"
                 )
+
+            # Print the verdict extracted from the actual XHR payload
+            log_run_verdict(xhr_results, run_number)
+
             logger.info(f"[main] Run {run_number} completed successfully")
             return True
         except Exception as exc:
             logger.error(f"[main] Run {run_number} failed: {exc}", exc_info=True)
+            log_run_verdict(xhr_results, run_number)
             return False
 
 

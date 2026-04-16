@@ -15,3 +15,6 @@ __pycache__/
 
 # Recorded keystroke profiles — keep folder, ignore actual data
 keystrokes/*.json
+
+# XHR capture logs — may contain session tokens and detection scores
+logs/

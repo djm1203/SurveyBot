@@ -6,9 +6,12 @@ RUN_COUNT = 1
 # Email strategy for the bot:
 #   "fixed"  — always use BOT_EMAIL exactly (easy to filter, useful for testing)
 #   "prefix" — use BOT_EMAIL_PREFIX + random suffix (harder to block en masse)
-BOT_EMAIL_MODE = "prefix"
-BOT_EMAIL = "surveybot.test@gmail.com"       # used when mode = "fixed"
-BOT_EMAIL_PREFIX = "surveybot"               # used when mode = "prefix"
+BOT_EMAIL_MODE = "natural"               # generates realistic name-based addresses
+BOT_EMAIL = "surveybot.test@gmail.com"   # used when mode = "fixed"
+BOT_EMAIL_PREFIX = "surveybot"           # used when mode = "prefix" (testing only)
+# "prefix" mode always produces surveybot##### addresses — a single grep in the
+# Qualtrics export identifies every bot run regardless of behavioral scores.
+# Use "natural" for real runs; switch to "prefix" only during local testing.
 
 # Human simulation timing constants (seconds)
 # These values produce a realistic 3–6 minute survey completion time.

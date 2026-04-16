@@ -120,6 +120,24 @@ class SurveyBot:
 
     def fill_page(self) -> None:
         """Detect and fill all visible questions on the current page."""
+        # Honeypot check — #honey_trap is injected outside all QuestionOuter
+        # containers by the blue team's QID2 CustomJS (positioned at top:-9999px,
+        # opacity:0).  Our is_visible() guards mean we'll never fill it, but log
+        # its state every page so any accidental fill surfaces immediately.
+        try:
+            honeypot = self.page.locator("#honey_trap")
+            if honeypot.count() > 0:
+                val = honeypot.input_value()
+                if val:
+                    logger.error(
+                        f"[bot] HONEYPOT FILLED — value: '{val}' — "
+                        "this run will be flagged as CRITICAL"
+                    )
+                else:
+                    logger.debug("[bot] Honeypot present and empty — OK")
+        except Exception:
+            pass
+
         containers = self._find_question_containers()
         logger.info(f"[bot] {len(containers)} question container(s) found")
 
@@ -516,6 +534,13 @@ class SurveyBot:
             try:
                 locator.press_sequentially(text, delay=delay)
             except Exception:
+                # Last-resort: .fill() sets value without firing keyboard events.
+                # Qualtrics LegacyTextAnalytics records keystrokeCount=0 and
+                # pasteCount=1 for the field — a direct detection signal.
+                logger.warning(
+                    "[bot] _type_text fell back to .fill() — "
+                    "LegacyTextAnalytics will record keystrokeCount=0 / pasteCount=1"
+                )
                 locator.fill(text)
 
     def _human_click(self, locator) -> None:

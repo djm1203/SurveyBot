@@ -139,6 +139,25 @@ class BrowserSession:
         self.mode = "camoufox"
         logger.info("[stealth] Launched Camoufox browser")
 
+        # Canvas hash probe — runs on a blank page immediately after context
+        # creation.  Log the last 20 chars of the canvas data URL; compare
+        # across runs to confirm Camoufox noise injection is rotating the hash.
+        # If two runs produce the same tail, canvas-based duplicate detection
+        # (RelevantID / Q_DuplicateRespondent) will link them.
+        try:
+            canvas_tail = self.page.evaluate(
+                "() => {"
+                "  const c = document.createElement('canvas');"
+                "  const ctx = c.getContext('2d');"
+                "  ctx.font = '14px Arial';"
+                "  ctx.fillText('fingerprint_probe', 2, 15);"
+                "  return c.toDataURL().slice(-24);"
+                "}"
+            )
+            logger.debug(f"[stealth] Canvas hash tail: {canvas_tail}")
+        except Exception:
+            pass
+
     def _launch_playwright_fallback(
         self,
         fingerprint: dict,

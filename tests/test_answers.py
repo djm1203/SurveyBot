@@ -57,11 +57,18 @@ def test_email_uses_known_domain():
 
 
 def test_email_prefix_mode():
-    # Default mode is "prefix" — local part starts with BOT_EMAIL_PREFIX
-    from config import BOT_EMAIL_PREFIX
-    email = random_email(first="Alice", last="Smith")
-    local = email.split("@")[0]
-    assert local.startswith(BOT_EMAIL_PREFIX)
+    # Explicitly test "prefix" mode — local part starts with BOT_EMAIL_PREFIX.
+    # Must patch answers.BOT_EMAIL_MODE (the already-imported name), not
+    # config.BOT_EMAIL_MODE, because answers.py binds the value at import time.
+    import answers as _ans
+    original = _ans.BOT_EMAIL_MODE
+    try:
+        _ans.BOT_EMAIL_MODE = "prefix"
+        email = random_email(first="Alice", last="Smith")
+        local = email.split("@")[0]
+        assert local.startswith(_ans.BOT_EMAIL_PREFIX)
+    finally:
+        _ans.BOT_EMAIL_MODE = original
 
 
 def test_email_without_hints_still_valid():
@@ -105,11 +112,17 @@ def test_answer_email_valid():
     assert EMAIL_RE.match(answer_text_field("email"))
 
 
-def test_answer_email_uses_bot_prefix():
-    from config import BOT_EMAIL_PREFIX
-    email = answer_text_field("email", first_name="Carol", last_name="King")
-    local = email.split("@")[0]
-    assert local.startswith(BOT_EMAIL_PREFIX)
+def test_answer_email_prefix_mode_uses_bot_prefix():
+    # Explicitly test "prefix" mode — patch answers module, not config module.
+    import answers as _ans
+    original = _ans.BOT_EMAIL_MODE
+    try:
+        _ans.BOT_EMAIL_MODE = "prefix"
+        email = answer_text_field("email", first_name="Carol", last_name="King")
+        local = email.split("@")[0]
+        assert local.startswith(_ans.BOT_EMAIL_PREFIX)
+    finally:
+        _ans.BOT_EMAIL_MODE = original
 
 
 def test_answer_generic_returns_string():

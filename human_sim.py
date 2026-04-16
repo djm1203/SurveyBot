@@ -61,6 +61,16 @@ _FALLBACK_DWELL_STD   = 25
 _FALLBACK_FLIGHT_MEAN = 130
 _FALLBACK_FLIGHT_STD  = 100
 
+# Offset added to every inter-keystroke sample (profile-based or fallback).
+#
+# WHY THIS EXISTS:
+# Our recorded keystroke profiles reflect fast typists (mean_flight 91–96 ms).
+# The blue team's JS flags any run where typing_avg_speed_ms < 120 ms as
+# "High Speed Typing".  Adding a flat 50 ms offset shifts the effective mean to
+# ~141–146 ms — safely above the threshold — while preserving the natural
+# variance pattern of each individual profile.
+_FLIGHT_OFFSET_MS: float = 50.0
+
 
 # ---------------------------------------------------------------------------
 # Profile management
@@ -90,9 +100,11 @@ def select_profile() -> str | None:
         with open(chosen_path, encoding="utf-8") as f:
             data = json.load(f)
         _active_profile = data["profile"]
+        effective_flight = _active_profile['mean_flight'] + _FLIGHT_OFFSET_MS
         logger.info(
             f"[human_sim] Loaded profile '{chosen_path.name}' — "
-            f"mean flight: {_active_profile['mean_flight']:.0f}ms, "
+            f"mean flight: {_active_profile['mean_flight']:.0f}ms "
+            f"(effective: {effective_flight:.0f}ms after +{_FLIGHT_OFFSET_MS:.0f}ms offset), "
             f"mean dwell: {_active_profile['mean_dwell']:.0f}ms"
         )
         return chosen_path.name
@@ -291,5 +303,7 @@ def _sample_flight_ms() -> float:
         mean = _FALLBACK_FLIGHT_MEAN
         std  = _FALLBACK_FLIGHT_STD
 
-    # Clamp to a sensible range — never negative, never so long it looks frozen
-    return max(20.0, min(600.0, random.gauss(mean, std)))
+    # Apply offset then clamp — offset shifts the mean above the 120 ms
+    # detection threshold without distorting the distribution shape.
+    raw = random.gauss(mean, std) + _FLIGHT_OFFSET_MS
+    return max(60.0, min(600.0, raw))

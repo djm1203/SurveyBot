@@ -52,7 +52,7 @@ from stealth import launch_browser
 # All modules use logging.getLogger(__name__), so configuring the root
 # logger here propagates to every module automatically.
 # ---------------------------------------------------------------------------
-LOG_LEVEL = logging.INFO   # Change to logging.DEBUG for verbose output
+LOG_LEVEL = logging.DEBUG   # Change to logging.DEBUG for verbose output
 
 logging.basicConfig(
     level=LOG_LEVEL,
@@ -136,10 +136,10 @@ def prompt_config() -> dict:
         if not mode_input:
             email_mode = BOT_EMAIL_MODE
             break
-        if mode_input in ("prefix", "fixed"):
+        if mode_input in ("prefix", "fixed", "natural"):
             email_mode = mode_input
             break
-        print("  Please type 'prefix' or 'fixed'.")
+        print("  Please type 'prefix', 'fixed', or 'natural'.")
 
     # ── Confirmation ─────────────────────────────────────────────────────
     print("\n" + "─" * width)
@@ -172,7 +172,7 @@ def run_once(run_number: int, total_runs: int, url: str, email_mode: str) -> boo
     run_number  : 1-based index of this run (for logging)
     total_runs  : Total number of runs planned (for logging)
     url         : Survey URL to navigate to
-    email_mode  : "prefix" or "fixed" — overrides config.BOT_EMAIL_MODE
+    email_mode  : "prefix", "fixed", or "natural" — overrides config.BOT_EMAIL_MODE
     """
     logger.info(f"{'='*55}")
     logger.info(f"  RUN {run_number} of {total_runs}")
@@ -237,7 +237,15 @@ def run_once(run_number: int, total_runs: int, url: str, email_mode: str) -> boo
             },
         )
         try:
+            _t0 = time.time()
             bot.run()
+            elapsed = time.time() - _t0
+            logger.info(f"[main] Estimated Q_TotalDuration: {elapsed:.1f}s")
+            if elapsed < 30:
+                logger.warning(
+                    f"[main] Completed in {elapsed:.1f}s — below 30s threshold; "
+                    "increase TIMING values or blue team may filter on Q_TotalDuration"
+                )
             logger.info(f"[main] Run {run_number} completed successfully")
             return True
         except Exception as exc:
@@ -252,11 +260,12 @@ def main() -> None:
     # Collect URL, run count, and email mode from the user before anything launches
     cfg = prompt_config()
 
-    # Apply the chosen email mode globally so answers.py picks it up.
-    # We patch the config module directly so the import in answers.py
-    # sees the updated value without needing a restart.
+    # answers.py binds BOT_EMAIL_MODE at import time via `from config import ...`
+    # so patching config alone has no effect — patch answers directly too.
     import config as _cfg_module
+    import answers as _ans_module
     _cfg_module.BOT_EMAIL_MODE = cfg["email_mode"]
+    _ans_module.BOT_EMAIL_MODE = cfg["email_mode"]
 
     logger.info("SurveyBot starting")
     logger.info(f"Target URL  : {cfg['url']}")

@@ -421,7 +421,7 @@ class SurveyBot:
                 x = box["x"] + box["width"] * frac
                 y = box["y"] + box["height"] / 2
                 try:
-                    from mouse import bezier_move
+                    from .mouse import bezier_move
                     bezier_move(self.page, x, y)
                 except Exception:
                     self.page.mouse.move(x, y)
@@ -443,7 +443,7 @@ class SurveyBot:
                 x = box["x"] + box["width"] * frac
                 y = box["y"] + box["height"] * 0.75
                 try:
-                    from mouse import bezier_move
+                    from .mouse import bezier_move
                     bezier_move(self.page, x, y)
                 except Exception:
                     self.page.mouse.move(x, y)

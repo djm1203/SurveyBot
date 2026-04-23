@@ -14,13 +14,14 @@
 4. [Layer 1 — Stealth Browser](#4-layer-1--stealth-browser)
 5. [Layer 2 — Survey Navigation](#5-layer-2--survey-navigation)
 6. [Layer 3 — Human Simulation](#6-layer-3--human-simulation)
-7. [Detection Vectors & Mitigations](#7-detection-vectors--mitigations)
-8. [Dependencies & Packages](#8-dependencies--packages)
-9. [Key Design Decisions & Tradeoffs](#9-key-design-decisions--tradeoffs)
-10. [Qualtrics-Specific Findings](#10-qualtrics-specific-findings)
-11. [Configuration & Tunability](#11-configuration--tunability)
-12. [Known Limitations](#12-known-limitations)
-13. [Running the Bot](#13-running-the-bot)
+7. [Detection Measurement — XHR Capture](#7-detection-measurement--xhr-capture)
+8. [Detection Vectors & Mitigations](#8-detection-vectors--mitigations)
+9. [Dependencies & Packages](#9-dependencies--packages)
+10. [Key Design Decisions & Tradeoffs](#10-key-design-decisions--tradeoffs)
+11. [Qualtrics-Specific Findings](#11-qualtrics-specific-findings)
+12. [Configuration & Tunability](#12-configuration--tunability)
+13. [Known Limitations](#13-known-limitations)
+14. [Running the Bot](#14-running-the-bot)
 
 ---
 
@@ -66,41 +67,45 @@ Rather than attacking Qualtrics directly, we build a bot that **genuinely looks 
 
 ## 3. System Architecture
 
-The bot is organized into three independent layers, each responsible for a distinct deception concern.
+The bot is organized into three independent layers, each responsible for a distinct deception concern. All core modules live in the `src/` package. Entry-point scripts (`main.py`, `warm_profile.py`, `recorder.py`) stay at the project root.
 
 ```
 main.py  (orchestrator — runs N independent submissions)
 │
 ├── LAYER 1 — Stealth Browser
-│    ├── stealth.py       Browser launch, context isolation, storage_state restore
-│    ├── fingerprint.py   Per-run browser identity (UA, screen, locale, timezone)
-│    └── warm_profile.py  Pre-warms browser profile with realistic browsing history
+│    ├── src/stealth.py       Browser launch, context isolation, storage_state restore
+│    ├── src/fingerprint.py   Per-run browser identity (UA, screen, locale, timezone)
+│    └── warm_profile.py      Pre-warms browser profile with realistic browsing history
 │
 ├── LAYER 2 — Survey Navigation
-│    ├── bot.py           DOM analysis, question type dispatch, page flow
-│    ├── answers.py       Answer generation (names, email, choices, slider)
-│    └── branching.py     Completion detection, conditional question handling
+│    ├── src/bot.py           DOM analysis, question type dispatch, page flow
+│    ├── src/answers.py       Answer generation (names, email, choices, slider)
+│    └── src/branching.py     Completion detection, conditional question handling
 │
-└── LAYER 3 — Human Simulation
-     ├── human_sim.py     Keystroke profile replay, reading pauses, scroll simulation
-     └── mouse.py         WindMouse physics engine — gravity + wind + overshoot
+├── LAYER 3 — Human Simulation
+│    ├── src/human_sim.py     Keystroke profile replay, reading pauses, scroll simulation
+│    └── src/mouse.py         WindMouse physics engine — gravity + wind + overshoot
+│
+└── MEASUREMENT
+     └── src/xhr_capture.py   Intercepts Qualtrics XHR to read live bot-score verdicts
 ```
 
 ### File responsibilities at a glance
 
-| File | Lines | Responsibility |
-|------|-------|----------------|
-| `main.py` | ~307 | Orchestrates N runs; CLI prompt; inter-run gaps; warmed profile lookup |
-| `stealth.py` | ~249 | Browser launch with anti-detection; context isolation; storage_state restore |
-| `fingerprint.py` | ~163 | Consistent per-run browser identity generation |
-| `warm_profile.py` | ~120 | One-time browser pre-warming for reCAPTCHA v3 score improvement |
-| `bot.py` | ~530 | Question type detection and dispatch; page navigation; honeypot check |
-| `answers.py` | ~260 | Pure Python answer generation; field classification; free-text pool |
-| `branching.py` | ~146 | Survey completion detection; new-question handling |
-| `human_sim.py` | ~320 | Keystroke replay; flight-time offset; scroll simulation; behavioral pacing |
-| `mouse.py` | ~220 | WindMouse physics engine (gravity + wind + overshoot + correction) |
-| `config.py` | ~47 | All tunable timing and URL constants |
-| `recorder.py` | — | Captures real human typing profiles for replay |
+| File | Responsibility |
+|------|----------------|
+| `main.py` | Orchestrates N runs; CLI prompt; inter-run gaps; warmed profile lookup; cookie verification |
+| `src/stealth.py` | Browser launch with anti-detection; context isolation; storage_state restore |
+| `src/fingerprint.py` | Consistent per-run browser identity generation |
+| `warm_profile.py` | One-time browser pre-warming for reCAPTCHA v3 score improvement |
+| `src/bot.py` | Question type detection and dispatch; page navigation; honeypot check |
+| `src/answers.py` | Pure Python answer generation; field classification; free-text pool |
+| `src/branching.py` | Survey completion detection; conditional question handling |
+| `src/human_sim.py` | Keystroke replay; flight-time offset; scroll simulation; behavioral pacing |
+| `src/mouse.py` | WindMouse physics engine (gravity + wind + overshoot + correction) |
+| `src/xhr_capture.py` | Playwright request+response interceptor; bot-score extraction from XHR payloads |
+| `src/config.py` | All tunable timing and URL constants |
+| `recorder.py` | Captures real human typing profiles for replay |
 
 ---
 
@@ -116,6 +121,14 @@ Three-tier fallback so the bot works even when optional packages are missing:
 3rd choice:  Plain Playwright Firefox                 ← last resort
 ```
 
+`main.py` enforces that only the primary tier is used for real runs — if `session.mode != "camoufox"`, the run aborts with an ERROR log rather than continuing with a detectable fallback:
+
+```python
+if session.mode != "camoufox":
+    logger.error("[main] Browser launched in fallback mode — aborting run.")
+    return False
+```
+
 **Why Firefox over Chrome?**  
 Chromium-based automation is heavily targeted by detection libraries (FingerprintJS, BotD, Cloudflare). Firefox has a lower automation signal baseline, and Camoufox patches it at the C++ level — something no JS shim can fully replicate for Chrome.
 
@@ -129,7 +142,7 @@ Camoufox is a Playwright-compatible fork of Firefox that removes automation arti
 - Font enumeration is realistic for the target OS
 - No headless-mode timing quirks
 
-Key parameters used in `stealth.py`:
+Key parameters used in `src/stealth.py`:
 
 ```python
 Camoufox(
@@ -173,14 +186,28 @@ reCAPTCHA v3 scores a session based on Google cookie presence, browsing history,
 **`warm_profile.py`** — run once before a bot session to create the profile:
 
 ```
-Camoufox launches → visits Google → YouTube → Wikipedia → AP News → BBC
+Camoufox launches → visits Google × 3 → YouTube
+  → then 3 randomly-selected sites from:
+    [Wikipedia, AP News, BBC, Stack Overflow, GitHub, Reddit, Weather.gov, ESPN]
   Human scroll + mouse events on each site
   Saves context.storage_state() → profiles/warmed_profile_TIMESTAMP.json
 ```
 
-`main.py` picks the most recently saved profile automatically (`profiles/warmed_profile_*.json` sorted by name descending).
+The filler site pool is randomized each time `warm_profile.py` runs so no two profiles have an identical visit sequence. `main.py` picks randomly from the **3 most recent** profiles rather than always the newest, which:
+- Varies the NID/VISITOR_INFO cookie values across runs (reducing cross-submission correlation)
+- Provides fallback if the newest profile is corrupted
 
-### 4.4 Browser Fingerprint Generation (`fingerprint.py`)
+> **Important:** Profiles must be regenerated **hours apart**, not minutes apart. Two profiles created within 2 minutes of each other share the same Google session and reCAPTCHA scores them identically. Generate one in the morning, one in the afternoon, one in the evening for best results.
+
+**Cookie verification** — `main.py` logs all Google-domain cookie names immediately after browser launch:
+
+```
+[main] Google cookies loaded: ['NID', 'SOCS', '1P_JAR', 'AEC', 'CONSENT']
+```
+
+If this line shows `NONE`, the storage_state is not loading (possibly a file path issue) and every run will receive a cold-context reCAPTCHA score of 0.1–0.3 regardless of the profile.
+
+### 4.4 Browser Fingerprint Generation (`src/fingerprint.py`)
 
 Every run generates a distinct, internally-consistent "person" identity:
 
@@ -205,11 +232,11 @@ Every run generates a distinct, internally-consistent "person" identity:
 
 ## 5. Layer 2 — Survey Navigation
 
-### 5.1 Question Type Dispatcher (`bot.py`)
+### 5.1 Question Type Dispatcher (`src/bot.py`)
 
 The bot detects question types from the DOM rather than hard-coding the survey structure. This makes it portable to any Qualtrics survey.
 
-Detection is evaluated in priority order (order matters — see §10 for why):
+Detection is evaluated in priority order (order matters — see §11 for why):
 
 ```
 input[type='text']                    → handle_text_input
@@ -220,7 +247,7 @@ input[type='checkbox']                → handle_checkbox
 select                                → handle_dropdown
 ```
 
-### 5.2 Field Classification & Answer Generation (`answers.py`)
+### 5.2 Field Classification & Answer Generation (`src/answers.py`)
 
 Text fields are classified by their question label before an answer is generated:
 
@@ -257,15 +284,17 @@ Three modes configurable at runtime via CLI:
 
 Natural mode addresses cannot be identified by a single export grep, unlike prefix mode. 90,000 suffix combinations × 10 domains = 900,000 unique addresses before theoretical collision.
 
-### 5.4 Survey Completion Detection (`branching.py`)
+**Runtime patching:** `answers.py` imports `BOT_EMAIL_MODE` at load time. If the CLI selects a different mode, `main.py` patches `src.answers.BOT_EMAIL_MODE` directly (not `src.config.BOT_EMAIL_MODE`) to ensure the already-imported value is updated.
+
+### 5.4 Survey Completion Detection (`src/branching.py`)
 
 Three independent signals checked in order:
 
 1. **URL pattern** — `SE=` or `SurveyRetire` in URL (Qualtrics's native end-of-survey redirect)
-2. **Body text scan** — checks for phrases like `"thank you"`, `"your response has been recorded"`, `"end of survey"`
+2. **Body text scan** — checks for phrases like `"thank you"`, `"your response has been recorded"`, `"end of survey"`, but also ballot-stuffing rejection phrases: `"you have already taken this survey"`, `"quota is full"`, `"sorry, you are not eligible"`
 3. **No navigation buttons** — both `#NextButton` and `#submitButton` absent after page settles, confirmed by URL match
 
-**Why three signals?** Qualtrics offers custom end-of-survey redirects, embedded survey modes, and white-label deployments — each may use a different completion signal. Multiple fallbacks ensure the bot stops cleanly regardless of survey configuration.
+**Why three signals?** Qualtrics offers custom end-of-survey redirects, embedded survey modes, and white-label deployments — each may use a different completion signal. Multiple fallbacks ensure the bot stops cleanly regardless of survey configuration. The ballot-stuffing phrases catch cases where Qualtrics itself has flagged the submission and shown a rejection page.
 
 ### 5.5 Page Transition Handling
 
@@ -300,7 +329,7 @@ The check runs before clicking Next so the log captures the exact value that was
 
 ## 6. Layer 3 — Human Simulation
 
-### 6.1 Keystroke Dynamics Replay (`human_sim.py` + `recorder.py`)
+### 6.1 Keystroke Dynamics Replay (`src/human_sim.py` + `recorder.py`)
 
 The most sophisticated behavioral layer in the system.
 
@@ -351,7 +380,13 @@ If `_type_text()` is forced to use `.fill()` (e.g. when `press_sequentially` rai
 
 This makes paste-detection failures visible in the log immediately.
 
-### 6.2 WindMouse Physics Engine (`mouse.py`)
+**Double-click prevention:**  
+`type_with_profile()` does NOT call `locator.click()` internally — callers are responsible for positioning the cursor before typing. This prevents the double-click that was causing text to be highlighted and overwritten mid-type.
+
+**Field clearing with keyboard, not `fill("")`:**  
+Text fields are cleared via `Control+a` → `Delete` before typing, never via `el.fill("")`. The `.fill()` method fires a synthetic `input` event that LegacyTextAnalytics records as a paste action (pasteCount+1).
+
+### 6.2 WindMouse Physics Engine (`src/mouse.py`)
 
 Real human mouse movement follows physics: there is momentum, slight overshoots, and a correction phase. Straight-line or uniform-velocity movement is a known bot signal; Bezier curves improve on this but still lack authentic physics. The system was rewritten to use the **WindMouse algorithm**:
 
@@ -360,6 +395,7 @@ Parameters:
   gravity  = 9.0   — pull toward the target (increases with distance)
   wind     = 3.0   — random lateral turbulence
   max_step = 12.0  — velocity cap to prevent teleportation
+  max_iterations = 300  — hard cap (see Finding 11)
 
 Each iteration:
   dist    = sqrt((tx-x)² + (ty-y)²)
@@ -375,6 +411,11 @@ Each iteration:
 
 This produces trajectories with realistic curvature, acceleration, and deceleration — matching the physical motor control pattern described in Fitts's Law studies.
 
+**Event counts by distance (tuned for standard 1366×768 viewport):**
+- Short moves (< 150 px): ~40–80 events, fast snap
+- Medium moves (150–500 px): ~80–200 events, smooth arc
+- Long moves (> 500 px): ~200–400 events, wide bow
+
 **Overshoot + correction pattern:**  
 After reaching the target, the engine simulates a slight overshoot (5–12% of travel distance past the target) and a 60–160ms correction back. This matches the motor-correction behavior seen in human mouse tracking data and defeats path-efficiency detectors (`efficiency > 0.99` flag).
 
@@ -386,7 +427,7 @@ The inner loop wraps each `page.mouse.move()` call in a try/except. When Qualtri
 
 Public API is unchanged from the previous Bezier implementation: `bezier_click`, `bezier_move`, `reset_position`.
 
-### 6.3 Page Scroll Simulation (`human_sim.py`)
+### 6.3 Page Scroll Simulation (`src/human_sim.py`)
 
 Every page load triggers a `simulate_page_scroll()` call before any answers are filled. This generates scroll events that reCAPTCHA v3 and behavioral biometrics expect to see from a reading user:
 
@@ -425,7 +466,75 @@ Reading pauses scale with the number of visible questions, mirroring how humans 
 
 ---
 
-## 7. Detection Vectors & Mitigations
+## 7. Detection Measurement — XHR Capture
+
+`src/xhr_capture.py` is the observability layer. It intercepts Qualtrics network traffic in real time and extracts the actual bot-detection scores assigned to each run — giving immediate feedback without needing to check the Qualtrics admin panel.
+
+### 7.1 How Qualtrics stores bot scores
+
+Bot detection data travels in **two separate places** in the Qualtrics protocol:
+
+| Data | Where it travels | How we capture it |
+|------|-----------------|-------------------|
+| CustomJS biometrics: `bot_score`, `typing_avg_speed_ms`, `mouse_path_efficiency`, `mouse_velocity_stddev`, etc. | **Request body** — submitted as `ED[field_name]=value` URL-encoded form parameters on every `/next` POST | `page.on("request")` → parse POST body with `parse_qs()` |
+| Survey Metadata: `Q_RecaptchaScore`, `Q_TotalDuration`, `Q_DuplicateRespondent`, `Q_RelevantIDFraudScore` | **Response body** — returned as JSON in the SM object of each `/next` response | `page.on("response")` → JSON parse → extract SM keys |
+
+The critical insight from live testing: **`bot_score` is in the request, not the response**. A response-only interceptor (page.on("response")) will always show `bot_score = N/A` regardless of payload size, because the server never echoes these fields back in the response body. The ED fields are written by the CustomJS block client-side and submitted to the server; the server stores them but doesn't return them.
+
+### 7.2 Implementation
+
+```python
+results = attach_capture(page, run_label="run01")
+# ... bot.run() ...
+log_run_verdict(results, run_number=1)
+```
+
+`attach_capture()` registers both listeners and returns a mutable dict that is populated in real time as traffic arrives:
+
+```python
+{
+    "bot_score":               "Low (Human)",  # or "High (Bot)"
+    "Q_RecaptchaScore":        0.7,
+    "Q_TotalDuration":         44,
+    "Q_DuplicateRespondent":   "false",
+    "typing_avg_speed_ms":     143.2,
+    "mouse_path_efficiency":   0.87,
+    "mouse_velocity_stddev":   0.18,
+    "pasteCount_total":        0,
+    "passed":                  True,
+}
+```
+
+**`attach_capture()` must be called BEFORE `page.goto()`** so the `/start` response is captured (which contains the initial reCAPTCHA score).
+
+### 7.3 Response body truncation fix
+
+Qualtrics `/start` and first `/next` responses include the full survey definition (QuestionDefinitions, CustomJS source, etc.) — often 40–80KB. The original 12KB cap cut off the response before reaching the SM/ED fields at the end of the JSON. The current implementation reads the full body, parses it, extracts the fields it needs, then stores only a 300-character preview in the disk log.
+
+### 7.4 Verdict log format
+
+After each run, `log_run_verdict()` prints:
+
+```
+[xhr_capture] ────────────────────────────────────────────────────
+[xhr_capture]  Run  1 XHR Verdict: PASS (human)
+[xhr_capture] ────────────────────────────────────────────────────
+[xhr_capture]   bot_score              : Low (Human)
+[xhr_capture]   Q_RecaptchaScore       : 0.7
+[xhr_capture]   Q_TotalDuration        : 44s
+[xhr_capture]   Q_DuplicateRespondent  : false
+[xhr_capture]   typing_avg_speed_ms    : 143.2
+[xhr_capture]   mouse_path_efficiency  : 0.87
+[xhr_capture]   mouse_velocity_stddev  : 0.18
+[xhr_capture]   pasteCount_total       : 0
+[xhr_capture] ────────────────────────────────────────────────────
+```
+
+Full raw captured payloads are also written to `logs/xhr_{run_label}_{timestamp}.json` for offline inspection.
+
+---
+
+## 8. Detection Vectors & Mitigations
 
 | Detection Vector | Risk Without Mitigation | Mitigation Applied | Layer |
 |-----------------|------------------------|-------------------|-------|
@@ -436,11 +545,14 @@ Reading pauses scale with the number of visible questions, mirroring how humans 
 | Screen resolution implausibility | Automated heuristics | Curated real-device resolution pool | 1 |
 | Stale Firefox version | Anomaly detection | Version pool kept current (128–138) | 1 |
 | Q_DuplicateRespondent token | Same-device detection | Per-run browser context isolation | 1 |
-| reCAPTCHA v3 cold context (0.1–0.3) | Low trust score flags submission | Warmed profile with Google cookies + browsing history | 1 |
+| reCAPTCHA v3 cold context (0.1–0.3) | Low trust score flags submission | Warmed profile with Google cookies + browsing history; cookie presence verified on launch | 1 |
+| Camoufox fallback mode | navigator.webdriver detectable | Run aborts if session.mode != "camoufox" | 1 |
 | Recognizable bot email pattern | Single grep identifies all runs | Natural name-based email mode; 900K combinations | 2 |
 | Same email address every run | Trivial duplicate filter | All three modes vary per run | 2 |
 | Honeypot field filled | CRITICAL bot flag in CustomJS | Explicit check + ERROR log before Next click | 2 |
 | Paste-filled text fields | LegacyTextAnalytics pasteCount=1 | `press_sequentially` keystroke-by-keystroke; fill() triggers warning | 3 |
+| Double-click on field entry | Selects text, drops first character typed | `type_with_profile()` never calls click(); caller positions cursor once | 3 |
+| `fill("")` synthetic clear event | LegacyTextAnalytics records as paste | `Control+a` + `Delete` keyboard clear instead | 3 |
 | Typing avg_speed < 120ms | CustomJS biometric threshold | `_FLIGHT_OFFSET_MS = 50ms` shifts effective average to 141–146ms | 3 |
 | Zero scroll events | reCAPTCHA v3 passive signal | `simulate_page_scroll()` on every page load | 3 |
 | Straight-line mouse movement | Path efficiency > 0.99 flag | WindMouse gravity + wind turbulence | 3 |
@@ -452,7 +564,7 @@ Reading pauses scale with the number of visible questions, mirroring how humans 
 
 ---
 
-## 8. Dependencies & Packages
+## 9. Dependencies & Packages
 
 ### Runtime Dependencies
 
@@ -474,18 +586,19 @@ Reading pauses scale with the number of visible questions, mirroring how humans 
 | `re` | Email address sanitization in `answers.py` |
 | `time` | Inter-run sleep (stdlib fallback for pre-click pause) |
 | `math` | WindMouse distance and velocity calculations |
+| `urllib.parse` | `parse_qs()` for decoding Qualtrics POST bodies in `xhr_capture.py` |
 
 ### Dev / Recording
 
 | Tool | Purpose |
 |------|---------|
 | `recorder.py` | Keystroke timing capture (run once per team member) |
-| `warm_profile.py` | Pre-warm browser with Google/YouTube/Wikipedia history (run before bot sessions) |
+| `warm_profile.py` | Pre-warm browser with Google/YouTube/news history (run before bot sessions) |
 | `keyboard` or `pynput` | Keypress event listening during recording |
 
 ---
 
-## 9. Key Design Decisions & Tradeoffs
+## 10. Key Design Decisions & Tradeoffs
 
 ### Architecture: Sync Playwright over async
 
@@ -497,10 +610,15 @@ Reading pauses scale with the number of visible questions, mirroring how humans 
 **Decision:** `bot.py` has zero knowledge of stealth or fingerprinting. `stealth.py` has zero knowledge of survey content.  
 **Rationale:** Each layer can be tested and debugged independently. `bot.py` can be pointed at any Playwright page. `stealth.py` can wrap any bot.
 
+### Camoufox-only enforcement
+
+**Decision:** Abort the run rather than continue in fallback mode.  
+**Rationale:** Playwright Firefox without Camoufox leaves `navigator.webdriver = true`, which is an immediate detection signal. A "succeeded" run in fallback mode would be meaningless for the red team exercise — the submission would be trivially detected regardless of behavioral quality. Better to abort and log clearly than silently produce flagged data.
+
 ### Graceful degradation (Camoufox → Playwright+stealth → Playwright)
 
-**Decision:** Three fallback levels rather than hard-requiring Camoufox.  
-**Rationale:** Camoufox requires a separate install; teammates may run the bot without it. The fallback chain ensures the bot always runs, with lower stealth guarantees noted in the log.
+**Decision:** Three fallback levels defined in `stealth.py`, but main.py enforces Camoufox-only.  
+**Rationale:** The fallback chain in stealth.py allows the code to be used in other contexts (development, testing) without requiring Camoufox. The enforcement in main.py is the production guard.
 
 ### Per-run context isolation vs. per-run browser restart
 
@@ -512,10 +630,25 @@ Reading pauses scale with the number of visible questions, mirroring how humans 
 **Decision:** Replaced cubic Bezier mouse paths with the WindMouse gravity + wind algorithm, plus an overshoot-and-correct phase.  
 **Rationale:** Analysis of the survey's embedded CustomJS revealed two explicit thresholds: path efficiency > 0.99 (near-straight-line) and velocity stddev < 0.02 (robotic uniformity). Bezier curves are smooth but have predictable curvature and no velocity variation. WindMouse uses stochastic wind turbulence and gravity pull that produces trajectories matching real mouse tracking data at the statistical level — efficiency < 0.95 and meaningful velocity variance across every move.
 
+### max_iterations = 300 (not 5000)
+
+**Decision:** Hard cap WindMouse iterations at 300.  
+**Rationale:** In testing on Camoufox, each `page.mouse.move()` call takes ~70–100ms because Camoufox routes all pointer events through the patched browser engine. At the original `max_iterations=5000`, a worst-case move would take 5000 × 70ms = 350 seconds (~6 minutes). With `max_iterations=300`, worst case is 300 × 70ms = 21 seconds. The cap doesn't limit realism — documented real move targets are 40–400 events; 300 is sufficient for any realistic distance.
+
 ### Warmed browser profile for reCAPTCHA v3
 
 **Decision:** Run `warm_profile.py` once before a bot session; load the saved profile via `storage_state` for each run.  
 **Rationale:** reCAPTCHA v3 is a passive scorer — it evaluates the entire session history, not just behavior on the target page. A fresh context with no Google cookies always scores 0.1–0.3, below the passing threshold for many survey configurations, regardless of how realistic the bot's behavior is. A pre-warmed profile carries real cookies and browsing history, pushing scores to 0.7–0.9.
+
+### Random profile selection from top-3 most recent
+
+**Decision:** Pick randomly from the 3 most recent warmed profiles, not always the newest.  
+**Rationale:** Always using the newest profile means every run in a session carries identical cookie state — reCAPTCHA may correlate submissions through identical cookie fingerprints. Rotating across 3 recent profiles varies the NID/VISITOR_INFO values. It also provides fallback if the newest profile is stale.
+
+### Request body interception for bot_score
+
+**Decision:** Use `page.on("request")` to extract ED fields from POST body, not `page.on("response")`.  
+**Rationale:** The CustomJS biometric block writes its verdict (bot_score, typing_avg_speed_ms, etc.) into Qualtrics Embedded Data and submits them as `ED[field_name]=value` URL-encoded parameters in the request body. The server stores these but does not echo them back in the response JSON. A response-only interceptor will always show `bot_score = N/A`.
 
 ### Flight-time offset rather than re-recording profiles
 
@@ -532,19 +665,14 @@ Reading pauses scale with the number of visible questions, mirroring how humans 
 **Decision:** Use `page.mouse.click(x, y)` on the slider track; never keyboard arrow keys.  
 **Rationale:** Qualtrics's custom drag slider marks a question as "answered" only when a `mousedown`+`mouseup` event fires on the track. Keyboard focus + arrow keys move the visual handle but leave the question flagged as unanswered, causing the page to fail validation on Next.
 
-### `_human_click()` only for radio and checkbox (no `check(force=True)`)
-
-**Decision:** Radio and checkbox interactions use only `_human_click()` on the visible label; `check(force=True)` on the hidden input was removed.  
-**Rationale:** The CustomJS biometrics log pointer events. `check(force=True)` fires a synthetic programmatic event that does not carry pointer coordinates — detectable as a non-human interaction. `_human_click()` drives the WindMouse engine to the element and fires a real pointer event, which Qualtrics's event listeners receive as authentic.
-
 ### Config-driven timing
 
-**Decision:** All timing constants live in `config.py`, none are hardcoded.  
+**Decision:** All timing constants live in `src/config.py`, none are hardcoded.  
 **Rationale:** Speed vs. stealth is a tunable tradeoff. Faster timing is useful for debugging; production timing (current defaults) produces 30–45s runs that clear Q_TotalDuration thresholds.
 
 ---
 
-## 10. Qualtrics-Specific Findings
+## 11. Qualtrics-Specific Findings
 
 These were discovered by inspecting live DOM and captured XHR payloads during development — they are not documented by Qualtrics and required empirical testing to diagnose.
 
@@ -578,11 +706,23 @@ These thresholds were extracted from the survey's embedded JavaScript and drove 
 ### Finding 8: TargetClosedError on page close mid-interaction
 When Qualtrics closes the current page (e.g. after the final submission), any in-flight `page.mouse.move()` or `page.keyboard.press()` raises `playwright._impl._errors.TargetClosedError`. This blocks for 30+ seconds per call (Playwright's default timeout) before raising. Fixed by: (a) wrapping mouse movement in try/except to exit immediately on TargetClosedError, (b) catching TargetClosedError in the main `bot.run()` loop and treating it as successful completion.
 
+### Finding 9: ED fields are in the request body, not the response
+Initial XHR capture implementation used `page.on("response")` only, resulting in `bot_score = N/A` on every run. Investigation revealed the CustomJS block submits biometric scores as `ED[field_name]=value` URL-encoded form parameters in the POST request body — the server stores them but never echoes them back in the response JSON. Fix: added `page.on("request")` to parse the POST body with `urllib.parse.parse_qs()` and extract all `ED[...]` key-value pairs.
+
+### Finding 10: Qualtrics response body is 40–80KB
+The `/start` response and first `/next` response include the complete survey definition (question text, CustomJS source, branching logic). The original 12KB body cap in the response interceptor was cutting off responses before reaching the SM/ED fields. Fix: switched to a parse-first approach — read the full body, parse JSON, extract only needed fields, store a 300-char preview on disk.
+
+### Finding 11: Camoufox processes every mouse event through the browser engine
+Each `page.mouse.move()` call in Camoufox takes ~70–100ms because Camoufox patches the browser at the C++ level and routes every pointer event through the patched engine for fingerprint-consistency guarantees. At `max_iterations=5000`, a single WindMouse move could take 5000 × 70ms = 350 seconds (~6 minutes). Observed empirically: Run 2 of a 2-run session hung for 6+ minutes on a page with 5 questions before being manually closed. Fix: reduced `max_iterations` from 5000 to 300. This is sufficient for all realistic move distances (documented target: long moves = ~200–400 events).
+
+### Finding 12: reCAPTCHA scores correlated between profiles generated in same session
+Two warmed profiles created 2 minutes apart in the same browser session carried nearly identical Google cookie state and both scored Q_RecaptchaScore = 0.20 (bot territory). Profiles must be generated in separate browser sessions, ideally hours apart, so reCAPTCHA sees distinct session histories.
+
 ---
 
-## 11. Configuration & Tunability
+## 12. Configuration & Tunability
 
-All runtime-tunable values live in `config.py`:
+All runtime-tunable values live in `src/config.py`:
 
 ```python
 SURVEY_URL = "https://baylor.qualtrics.com/jfe/form/SV_6GagF9EpumzN06W"
@@ -609,11 +749,11 @@ TIMING = {
 Current settings produce a run time of 30–45 seconds per submission — within plausible human reading speed for a 5-question survey. Values below the `read_per_question_mean = 1.0` / `min_action_delay = 0.15` range were flagged by Q_TotalDuration analysis in prior test runs.
 
 **Email mode override:**  
-The CLI `prompt_config()` in `main.py` accepts all three modes at runtime. The default shown in brackets comes from `config.py`, but any mode can be selected per session without editing files. `main.py` patches `answers.BOT_EMAIL_MODE` directly (not `config.BOT_EMAIL_MODE`) since `answers.py` imports the value at load time.
+The CLI `prompt_config()` in `main.py` accepts all three modes at runtime. The default shown in brackets comes from `src/config.py`, but any mode can be selected per session without editing files. `main.py` patches `src.answers.BOT_EMAIL_MODE` directly (not `src.config.BOT_EMAIL_MODE`) since `answers.py` imports the value at load time.
 
 ---
 
-## 12. Known Limitations
+## 13. Known Limitations
 
 ### IP-based detection (unmitigated)
 All submissions come from the same IP address. A Qualtrics administrator can trivially filter by IP in the response data. Mitigation would require a rotating proxy pool, which was out of scope for this capstone.
@@ -625,17 +765,17 @@ The bot requires a local Firefox install and runs headfully (non-headless). It c
 Three real human profiles have been recorded (`person_02.json`, `person_03.json`, `person_04.json`). A statistical analysis across many runs would reveal that timing patterns cluster around three distributions. Minimum recommended: 5–8 distinct profiles.
 
 ### Warmed profile staleness
-The warmed profile captures a snapshot of browser state at one point in time. Google cookies expire; reCAPTCHA v3 may devalue old profiles over time. The profile should be regenerated every few days for sustained operation.
+The warmed profile captures a snapshot of browser state at one point in time. Google cookies expire; reCAPTCHA v3 may devalue old profiles over time. The profile should be regenerated every few days for sustained operation. Profiles generated in the same session (within minutes of each other) share cookie state and score identically — generate them hours apart.
 
 ### No CAPTCHA handling
 If Qualtrics enables CAPTCHA challenges (not present in the test survey), the bot has no mechanism to solve them. Camoufox's clean fingerprint reduces the likelihood of CAPTCHA triggers, but does not eliminate them.
 
 ### Qualtrics survey-specific DOM assumptions
-The question dispatcher is heuristic — it relies on Qualtrics's standard DOM structure. Custom survey themes or Qualtrics updates that change class names could break detection. The selector lists in `bot.py` would need updating.
+The question dispatcher is heuristic — it relies on Qualtrics's standard DOM structure. Custom survey themes or Qualtrics updates that change class names could break detection. The selector lists in `src/bot.py` would need updating.
 
 ---
 
-## 13. Running the Bot
+## 14. Running the Bot
 
 ```bash
 # Install dependencies
@@ -647,9 +787,11 @@ python -m camoufox fetch
 python recorder.py
 # Follow prompts — output saved to keystrokes/person_XX.json
 
-# Pre-warm a browser profile for reCAPTCHA v3 (run once before a bot session)
-python warm_profile.py
-# Visits Google → YouTube → Wikipedia → AP News → BBC
+# Pre-warm a browser profile for reCAPTCHA v3
+# IMPORTANT: run each profile in a separate session, hours apart
+python warm_profile.py   # morning
+# (later)
+python warm_profile.py   # afternoon
 # Saves to profiles/warmed_profile_TIMESTAMP.json
 
 # Run the bot
@@ -658,24 +800,35 @@ python main.py
 ```
 
 **Recommended test procedure:**
-1. Run `warm_profile.py` to create a fresh profile
-2. Set `RUN_COUNT = 3` in `config.py` for a quick smoke test
-3. Check Qualtrics response data to verify submissions appear
-4. Note whether Q_DuplicateRespondent or CustomJS flags any responses
-5. Increase `RUN_COUNT` for volume testing
+1. Run `warm_profile.py` to create a fresh profile (separate session from prior profiles)
+2. Check the `[main] Google cookies loaded:` line — if it shows `NONE`, fix the storage_state path before running more submissions
+3. Set `RUN_COUNT = 3` in `src/config.py` for a quick smoke test
+4. Check the XHR verdict in the log — `bot_score` and `Q_RecaptchaScore` are the two critical numbers
+5. Check Qualtrics response data to verify submissions appear and aren't flagged
+6. Increase `RUN_COUNT` for volume testing
 
 **Log interpretation:**
 ```
-[main] Warmed profile: warmed_profile_20260415_150227.json   ← profile loaded
-[stealth] Canvas hash tail: pggMjosAAAAASUVORK5CYII=          ← per-run unique hash
-[stealth] Launched Camoufox browser                          ← primary browser active
+[main] Selected profile warmed_profile_20260423_140000.json (from 3 candidate(s))
+[main] Google cookies loaded: ['NID', 'SOCS', '1P_JAR', 'AEC']  ← storage_state loaded OK
+[stealth] Canvas hash tail: pggMjosAAAAASUVORK5CYII=              ← per-run unique hash
+[stealth] Launched Camoufox browser                              ← primary browser active
 [human_sim] Loaded profile 'person_04.json' — mean flight: 92ms (effective: 142ms after +50ms offset)
-[bot] ── Page 1 ──                                           ← bot entered main loop
-[bot] Honeypot present and empty — OK                        ← honeypot check passed
-[bot] 5 question container(s) found                          ← survey form loaded
-[bot] Textarea (first_name): 'Donna'                         ← name typed keystroke-by-keystroke
-[bot] Radio: CS - Cyber                                      ← major selected via WindMouse click
-[bot] Slider (click at 0.60 via [role='slider'])             ← excitement level set
-[branching] Complete — phrase: 'thank you'                   ← completion detected
-[main] Estimated Q_TotalDuration: 44.4s                      ← above 30s threshold — OK
+[bot] ── Page 1 ──                                               ← bot entered main loop
+[bot] Honeypot present and empty — OK                            ← honeypot check passed
+[bot] 5 question container(s) found                              ← survey form loaded
+[bot] Textarea (first_name): 'Donna'                             ← name typed keystroke-by-keystroke
+[bot] Radio: CS - Cyber                                          ← major selected via WindMouse click
+[bot] Slider (click at 0.60 via [role='slider'])                 ← excitement level set
+[branching] Complete — phrase: 'thank you'                       ← completion detected
+[main] Estimated Q_TotalDuration: 44.4s                          ← above 30s threshold — OK
+[xhr_capture]  Run  1 XHR Verdict: PASS (human)                  ← bot_score = Low (Human)
+[xhr_capture]   bot_score              : Low (Human)
+[xhr_capture]   Q_RecaptchaScore       : 0.7
+[xhr_capture]   Q_TotalDuration        : 44s
+[xhr_capture]   Q_DuplicateRespondent  : false
+[xhr_capture]   typing_avg_speed_ms    : 143.2
+[xhr_capture]   mouse_path_efficiency  : 0.87
+[xhr_capture]   mouse_velocity_stddev  : 0.18
+[xhr_capture]   pasteCount_total       : 0
 ```

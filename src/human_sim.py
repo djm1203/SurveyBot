@@ -71,6 +71,27 @@ _FALLBACK_FLIGHT_STD  = 100
 # variance pattern of each individual profile.
 _FLIGHT_OFFSET_MS: float = 50.0
 
+# ---------------------------------------------------------------------------
+# Typo simulation
+# Real humans make ~1–3% keystroke errors and self-correct immediately.
+# We inject adjacent-key typos to generate the backspace events and
+# "realization pauses" that biometric collectors expect to see.
+# ---------------------------------------------------------------------------
+_TYPO_RATE: float = 0.018   # ~1.8% — matches empirical human error rate
+
+# Full QWERTY adjacency map (lowercase).  Only includes keys likely to appear
+# in names / emails / free-text — no function keys, no numpad.
+_ADJACENT_KEYS: dict[str, str] = {
+    "q": "wa",  "w": "qeasd", "e": "wrds",  "r": "etdf",  "t": "ryfg",
+    "y": "tugh", "u": "yihj",  "i": "uojk",  "o": "ipkl",  "p": "ol",
+    "a": "qwsz", "s": "awedxz","d": "serfcx","f": "drtgvc","g": "ftyhbv",
+    "h": "gyujnb","j": "huikmn","k": "jiolm", "l": "kop",
+    "z": "asx",  "x": "zsdc",  "c": "xdfv",  "v": "cfgb",  "b": "vghn",
+    "n": "bhjm", "m": "njk",
+    "1": "2q",   "2": "13qw",  "3": "24we",  "4": "35er",  "5": "46rt",
+    "6": "57ty", "7": "68yu",  "8": "79ui",  "9": "80io",  "0": "9op",
+}
+
 
 # ---------------------------------------------------------------------------
 # Profile management
@@ -146,6 +167,24 @@ def type_with_profile(page, locator, text: str) -> None:
     """
     for char in text:
         flight_ms = _sample_flight_ms()
+
+        # Occasionally introduce an adjacent-key typo and self-correct.
+        # Only on characters that have a known neighbour and not on spaces —
+        # backspacing a space mid-word looks unnatural.
+        lower = char.lower()
+        if (char != " "
+                and lower in _ADJACENT_KEYS
+                and random.random() < _TYPO_RATE):
+            typo = random.choice(_ADJACENT_KEYS[lower])
+            # Preserve case of the original character for the typo
+            if char.isupper():
+                typo = typo.upper()
+            page.keyboard.type(typo)
+            # Realization pause — the moment the user notices the mistake
+            page.wait_for_timeout(random.randint(280, 560))
+            page.keyboard.press("Backspace")
+            page.wait_for_timeout(random.randint(80, 160))
+            logger.debug(f"[human_sim] Typo '{typo}' → corrected to '{char}'")
 
         # page.keyboard.type fires: keydown → keypress → input → keyup
         # This is exactly what a real browser sees from a physical keypress.

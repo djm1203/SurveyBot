@@ -4,20 +4,21 @@ A Python browser automation bot built for a red team vs. blue team capstone exer
 
 ## Architecture
 
-The bot operates in three layers:
+The bot operates in three evasion layers plus a measurement layer:
 
 | Layer | Files | Purpose |
 | --- | --- | --- |
-| **Stealth Browser** | `stealth.py`, `fingerprint.py`, `warm_profile.py` | Launches Camoufox (anti-detect Firefox) with realistic fingerprints; restores a pre-warmed browser profile for reCAPTCHA v3 scoring; isolates each run to a fresh context to defeat Q_DuplicateRespondent |
-| **Survey Navigation** | `bot.py`, `answers.py`, `branching.py` | Playwright automation that navigates Qualtrics page-by-page, selects answers, checks the honeypot field, and handles conditional branching |
-| **Human Simulation** | `human_sim.py`, `mouse.py`, `recorder.py` | WindMouse physics engine for realistic mouse paths, keystroke profile replay with flight-time offset to clear biometric thresholds, scroll simulation, and Gaussian-distributed pacing |
+| **Stealth Browser** | `src/stealth.py`, `src/fingerprint.py`, `warm_profile.py` | Launches Camoufox (anti-detect Firefox) with realistic fingerprints; restores a pre-warmed browser profile for reCAPTCHA v3 scoring; isolates each run to a fresh context to defeat Q_DuplicateRespondent |
+| **Survey Navigation** | `src/bot.py`, `src/answers.py`, `src/branching.py` | Playwright automation that navigates Qualtrics page-by-page, selects answers, checks the honeypot field, and handles conditional branching |
+| **Human Simulation** | `src/human_sim.py`, `src/mouse.py`, `recorder.py` | WindMouse physics engine for realistic mouse paths, keystroke profile replay with flight-time offset to clear biometric thresholds, scroll simulation, and Gaussian-distributed pacing |
+| **Measurement** | `src/xhr_capture.py` | Intercepts Qualtrics XHR traffic (both request bodies and response bodies) to extract live bot-score verdicts — `bot_score`, `Q_RecaptchaScore`, `Q_DuplicateRespondent`, typing and mouse metrics |
 
 ## Detection Vectors Addressed
 
 1. `navigator.webdriver` flag — Camoufox patches at C++ engine level
 2. Canvas / WebGL fingerprint consistency — Camoufox noise injection, verified per run via hash probe
 3. Q_DuplicateRespondent repeat-device detection — isolated browser context per run
-4. reCAPTCHA v3 cold-context low score (0.1–0.3) — pre-warmed profile with Google cookies + browsing history
+4. reCAPTCHA v3 cold-context low score (0.1–0.3) — pre-warmed profile with Google cookies + browsing history; verified on each launch via cookie presence check
 5. Honeypot hidden field — explicit check before every Next click; ERROR log if filled
 6. LegacyTextAnalytics paste detection — keystroke-by-keystroke typing via `press_sequentially`; fallback to `.fill()` triggers a warning log
 7. Typing avg-speed < 120ms biometric threshold — `_FLIGHT_OFFSET_MS = 50ms` shifts recorded profiles from 91–96ms to 141–146ms effective average
@@ -29,6 +30,9 @@ The bot operates in three layers:
 13. Submission burst pattern — 30–90s randomized inter-run gap
 14. Recognizable bot email pattern — natural name-based email mode (`donna.perez55@yahoo.com`)
 15. Browser fingerprint field inconsistency — BrowserForge generates internally-consistent UA / platform / locale / timezone tuples
+16. Camoufox fallback mode — run aborts if `session.mode != "camoufox"` rather than continuing with detectable `navigator.webdriver = true`
+17. Double-click on field entry — `type_with_profile()` never calls click internally; callers position cursor once
+18. `fill("")` synthetic clear event — fields cleared via `Control+a` + `Delete` keyboard sequence instead
 
 ## Setup
 
@@ -57,7 +61,9 @@ Warm a browser profile so reCAPTCHA v3 sees a session with real Google cookies a
 python warm_profile.py
 ```
 
-This visits Google, YouTube, Wikipedia, AP News, and BBC with human scroll and mouse events, then saves the browser state to `profiles/warmed_profile_TIMESTAMP.json`. The bot picks the most recently saved profile automatically. Re-run every few days to keep cookies fresh.
+This visits Google, YouTube, and a random selection of sites (Wikipedia, AP News, BBC, Stack Overflow, GitHub, Reddit, ESPN, etc.) with human scroll and mouse events, then saves the browser state to `profiles/warmed_profile_TIMESTAMP.json`.
+
+**Important:** Run each profile in a separate browser session, ideally hours apart. Profiles created minutes apart in the same session share cookie state and score identically under reCAPTCHA. The bot picks randomly from the 3 most recent profiles to vary cookie fingerprints across runs.
 
 ## Running the Bot
 
@@ -65,25 +71,51 @@ This visits Google, YouTube, Wikipedia, AP News, and BBC with human scroll and m
 python main.py
 ```
 
-You will be prompted for the survey URL, number of runs, and email mode (`natural` / `prefix` / `fixed`). Press Enter to accept the defaults from `config.py`.
+You will be prompted for the survey URL, number of runs, and email mode (`natural` / `prefix` / `fixed`). Press Enter to accept the defaults from `src/config.py`.
+
+Check the first log line after browser launch:
+
+```
+[main] Google cookies loaded: ['NID', 'SOCS', '1P_JAR', 'AEC']
+```
+
+If it shows `NONE`, the warmed profile did not load and reCAPTCHA will score every run 0.1–0.3. Fix the profile path before running more submissions.
+
+After each run, the XHR verdict is printed:
+
+```
+[xhr_capture]  Run  1 XHR Verdict: PASS (human)
+[xhr_capture]   bot_score              : Low (Human)
+[xhr_capture]   Q_RecaptchaScore       : 0.7
+[xhr_capture]   Q_TotalDuration        : 44s
+[xhr_capture]   Q_DuplicateRespondent  : false
+[xhr_capture]   typing_avg_speed_ms    : 143.2
+[xhr_capture]   mouse_path_efficiency  : 0.87
+[xhr_capture]   mouse_velocity_stddev  : 0.18
+[xhr_capture]   pasteCount_total       : 0
+```
 
 ## Project Structure
 
 ```text
 SurveyBot/
 ├── main.py              # entry point — CLI prompt, N-run orchestrator, inter-run gaps
-├── bot.py               # core Playwright navigation; honeypot check; question dispatch
-├── stealth.py           # Camoufox launch; context isolation; storage_state restore
-├── fingerprint.py       # BrowserForge fingerprint generation
 ├── warm_profile.py      # one-time browser pre-warming for reCAPTCHA v3
-├── human_sim.py         # keystroke replay; flight-time offset; scroll simulation
-├── mouse.py             # WindMouse physics engine (gravity + wind + overshoot)
-├── answers.py           # answer generation — names, emails, choices, free-text pool
-├── branching.py         # Qualtrics completion detection; conditional question handling
 ├── recorder.py          # keystroke timing profiler for teammates
-├── config.py            # URL, run count, email mode, timing constants
+├── src/
+│   ├── __init__.py
+│   ├── bot.py           # core Playwright navigation; honeypot check; question dispatch
+│   ├── stealth.py       # Camoufox launch; context isolation; storage_state restore
+│   ├── fingerprint.py   # BrowserForge fingerprint generation
+│   ├── human_sim.py     # keystroke replay; flight-time offset; scroll simulation
+│   ├── mouse.py         # WindMouse physics engine (gravity + wind + overshoot)
+│   ├── answers.py       # answer generation — names, emails, choices, free-text pool
+│   ├── branching.py     # Qualtrics completion detection; conditional question handling
+│   ├── xhr_capture.py   # XHR interceptor — reads bot scores from live Qualtrics traffic
+│   └── config.py        # URL, run count, email mode, timing constants
 ├── keystrokes/          # recorded JSON profiles (gitignored)
 ├── profiles/            # warmed browser profiles (gitignored)
+├── logs/                # XHR capture logs per run (gitignored)
 └── tests/
     └── test_answers.py  # pytest unit tests for answers.py
 ```

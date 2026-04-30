@@ -109,16 +109,55 @@ def _human_scroll(page, n: int = 3) -> None:
         time.sleep(random.uniform(0.3, 0.9))
 
 
-def _human_move(page) -> None:
+def _human_move(page, w: int = 1366, h: int = 768) -> None:
     """Move the mouse to a few random positions to generate telemetry."""
-    for _ in range(random.randint(3, 7)):
-        x = random.randint(100, 1100)
-        y = random.randint(80,  650)
+    for _ in range(random.randint(4, 9)):
+        x = random.randint(80, max(100, w - 100))
+        y = random.randint(60, max(80,  h - 80))
         try:
             page.mouse.move(x, y)
         except Exception:
             pass
-        time.sleep(random.uniform(0.05, 0.2))
+        time.sleep(random.uniform(0.05, 0.25))
+
+
+def _human_click_link(page, w: int = 1366, h: int = 768) -> None:
+    """
+    Click a visible anchor link on the current page, wait briefly, then
+    navigate back.  This generates the back-forward navigation history that
+    reCAPTCHA v3 values as evidence of a real browsing session.
+    Skips if no safe link is found.
+    """
+    try:
+        # Collect visible links that stay on the same domain (no external jumps)
+        links = page.locator("a[href]").all()
+        current_host = page.url.split("/")[2] if "//" in page.url else ""
+        candidates = []
+        for link in links[:30]:   # scan first 30 only — fast
+            try:
+                if not link.is_visible(timeout=200):
+                    continue
+                href = link.get_attribute("href") or ""
+                # Only follow relative links or same-host links
+                if href.startswith("/") or current_host in href:
+                    box = link.bounding_box()
+                    if box and 40 < box["x"] < w - 40 and 40 < box["y"] < h - 40:
+                        candidates.append(link)
+            except Exception:
+                continue
+
+        if not candidates:
+            return
+
+        target = random.choice(candidates[:10])
+        target.click(timeout=3_000)
+        time.sleep(random.uniform(2.5, 5.0))
+        _human_scroll(page, n=random.randint(1, 3))
+        _human_move(page, w, h)
+        page.go_back(timeout=5_000, wait_until="domcontentloaded")
+        time.sleep(random.uniform(1.0, 2.5))
+    except Exception:
+        pass   # navigation failures are non-fatal during warming
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +189,7 @@ def warm(headless: bool = False) -> str:
         return _warm_with_playwright(headless)
 
 
-def _run_sequence(page) -> None:
+def _run_sequence(page, w: int = 1366, h: int = 768) -> None:
     """Visit every site in _VISIT_SEQUENCE with human-like behaviour."""
     for url, min_s, max_s, label in _VISIT_SEQUENCE:
         logger.info(f"[warm] Visiting: {label} — {url}")
@@ -159,9 +198,13 @@ def _run_sequence(page) -> None:
         except Exception as exc:
             logger.warning(f"[warm] Navigation warning for {label}: {exc}")
 
-        # Simulate reading: scroll + random mouse movement
+        # Simulate reading: scroll + mouse movement + occasional link click
         _human_scroll(page, n=random.randint(2, 5))
-        _human_move(page)
+        _human_move(page, w, h)
+
+        # 60% chance of clicking a link and coming back — builds navigation history
+        if random.random() < 0.60:
+            _human_click_link(page, w, h)
 
         dwell = random.uniform(min_s, max_s)
         logger.info(f"[warm] Dwelling {dwell:.1f}s on {label}")
@@ -179,32 +222,41 @@ def _save_state(context, label: str) -> str:
 
 def _warm_with_camoufox(headless: bool) -> str:
     from camoufox.sync_api import Camoufox  # noqa: PLC0415
+    from src.fingerprint import _pick_resolution  # noqa: PLC0415
 
-    logger.info("[warm] Launching Camoufox for profile warming")
-    with Camoufox(headless=headless, os="windows", locale="en-US") as browser:
+    w, h = _pick_resolution()
+    logger.info(f"[warm] Launching Camoufox for profile warming ({w}×{h})")
+    with Camoufox(
+        headless=headless,
+        os="windows",
+        locale="en-US",
+        window=(w, h),
+    ) as browser:
         context = browser.new_context(
-            viewport={"width": 1366, "height": 768},
+            viewport={"width": w, "height": h},
             locale="en-US",
             timezone_id="America/Chicago",
         )
         page = context.new_page()
-        _run_sequence(page)
+        _run_sequence(page, w, h)
         return _save_state(context, "camoufox")
 
 
 def _warm_with_playwright(headless: bool) -> str:
     from playwright.sync_api import sync_playwright  # noqa: PLC0415
+    from src.fingerprint import _pick_resolution  # noqa: PLC0415
 
-    logger.info("[warm] Launching Playwright Firefox for profile warming")
+    w, h = _pick_resolution()
+    logger.info(f"[warm] Launching Playwright Firefox for profile warming ({w}×{h})")
     with sync_playwright() as pw:
         browser = pw.firefox.launch(headless=headless)
         context = browser.new_context(
-            viewport={"width": 1366, "height": 768},
+            viewport={"width": w, "height": h},
             locale="en-US",
             timezone_id="America/Chicago",
         )
         page = context.new_page()
-        _run_sequence(page)
+        _run_sequence(page, w, h)
         path = _save_state(context, "playwright")
         browser.close()
         return path

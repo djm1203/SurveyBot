@@ -64,9 +64,10 @@ class SurveyBot:
         """
         self.page = page
         self.config = config
-        # Persist generated name across questions so email matches
+        # Persist generated identity across pages so all fields stay consistent
         self._first_name: str | None = None
         self._last_name:  str | None = None
+        self._email:      str | None = None
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -238,17 +239,26 @@ class SurveyBot:
     def handle_text_input(self, container) -> None:
         label = self._question_label(container)
         field_type = classify_text_field(label)
-        text = answer_text_field(
-            field_type,
-            first_name=self._first_name,
-            last_name=self._last_name,
-        )
 
-        # Cache so email can stay consistent with the typed name
-        if field_type == "first_name":
-            self._first_name = text
-        elif field_type == "last_name":
-            self._last_name = text
+        # Return cached value on repeat pages so identity stays consistent
+        if field_type == "first_name" and self._first_name:
+            text = self._first_name
+        elif field_type == "last_name" and self._last_name:
+            text = self._last_name
+        elif field_type == "email" and self._email:
+            text = self._email
+        else:
+            text = answer_text_field(
+                field_type,
+                first_name=self._first_name,
+                last_name=self._last_name,
+            )
+            if field_type == "first_name":
+                self._first_name = text
+            elif field_type == "last_name":
+                self._last_name = text
+            elif field_type == "email":
+                self._email = text
 
         inputs = container.locator("input[type='text']")
         if inputs.count() == 0:
@@ -266,16 +276,25 @@ class SurveyBot:
         field_type = classify_text_field(label)
 
         if field_type in ("first_name", "last_name", "email"):
-            # Short-answer question that Qualtrics rendered as a <textarea>
-            text = answer_text_field(
-                field_type,
-                first_name=self._first_name,
-                last_name=self._last_name,
-            )
-            if field_type == "first_name":
-                self._first_name = text
-            elif field_type == "last_name":
-                self._last_name = text
+            # Return cached value on repeat pages so identity stays consistent
+            if field_type == "first_name" and self._first_name:
+                text = self._first_name
+            elif field_type == "last_name" and self._last_name:
+                text = self._last_name
+            elif field_type == "email" and self._email:
+                text = self._email
+            else:
+                text = answer_text_field(
+                    field_type,
+                    first_name=self._first_name,
+                    last_name=self._last_name,
+                )
+                if field_type == "first_name":
+                    self._first_name = text
+                elif field_type == "last_name":
+                    self._last_name = text
+                elif field_type == "email":
+                    self._email = text
         else:
             # Genuine open-ended text area — draw from the diverse free-text
             # pool so no two submissions share the same response string.

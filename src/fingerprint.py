@@ -8,10 +8,33 @@ Uses BrowserForge (bundled with camoufox) when available.
 Falls back to a hand-crafted pool of realistic values if not.
 """
 
+import ctypes
 import logging
 import random
 
 logger = logging.getLogger(__name__)
+
+
+def _get_screen_bounds() -> tuple[int, int]:
+    """
+    Return (usable_width, usable_height) of the primary monitor.
+
+    Subtracts 80px from height to leave room for the Windows taskbar and
+    browser chrome (address bar + tabs) so the browser window never overflows
+    the screen and the Next/Submit button stays reachable.
+
+    Falls back to 1366×768 on non-Windows or if ctypes fails.
+    """
+    try:
+        u32 = ctypes.windll.user32
+        # SM_CXSCREEN=0, SM_CYSCREEN=1 — primary monitor logical pixel dimensions
+        w = u32.GetSystemMetrics(0)
+        h = u32.GetSystemMetrics(1) - 80
+        if w > 800 and h > 500:   # sanity check
+            return w, h
+    except Exception:
+        pass
+    return 1366, 688   # conservative fallback
 
 # ---------------------------------------------------------------------------
 # Static data pools (used by the manual fallback)
@@ -24,15 +47,16 @@ _OS_POOL = [
     ("linux",   "Linux x86_64", 0.09),
 ]
 
-# Common desktop screen resolutions — capped at 1440×900 so the browser
-# window fits on a normal laptop screen and large-viewport slider issues
-# don't surface.
+# Common desktop screen resolutions in ascending order.
+# _pick_resolution() filters this list to only those that fit the actual screen.
 _RESOLUTIONS = [
+    (1280, 720),
+    (1280, 800),
     (1366, 768),
     (1440, 900),
-    (1280, 800),
     (1536, 864),
     (1600, 900),
+    (1920, 1080),
 ]
 
 # (locale, IANA timezone)  — US-heavy to match Baylor's likely user base
@@ -51,6 +75,26 @@ _FF_VERSIONS = list(range(128, 139))
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
+def _pick_resolution() -> tuple[int, int]:
+    """
+    Choose a random resolution from the pool that fits the actual screen.
+
+    Filters _RESOLUTIONS to those <= usable screen bounds, then picks
+    randomly from the survivors.  If nothing fits (tiny screen / ctypes
+    failure), falls back to the smallest entry in the pool.
+    """
+    max_w, max_h = _get_screen_bounds()
+    fitting = [(w, h) for w, h in _RESOLUTIONS if w <= max_w and h <= max_h]
+    if not fitting:
+        fitting = [_RESOLUTIONS[0]]
+    chosen = random.choice(fitting)
+    logger.debug(
+        f"[fingerprint] Screen bounds {max_w}×{max_h} → "
+        f"picked resolution {chosen[0]}×{chosen[1]}"
+    )
+    return chosen
+
 
 def generate_fingerprint() -> dict:
     """
@@ -86,12 +130,10 @@ def _from_browserforge() -> dict:
     )
     fp = gen.generate()
 
-    # BrowserForge fingerprint object — attribute access may vary by version
-    try:
-        w = fp.screen.width
-        h = fp.screen.height
-    except AttributeError:
-        w, h = random.choice(_RESOLUTIONS)
+    # BrowserForge may return any screen size including 1920×1080 or larger.
+    # Always override with a resolution that fits the actual screen — this
+    # keeps the Camoufox window on screen and the Next button reachable.
+    w, h = _pick_resolution()
 
     try:
         ua = fp.navigator.userAgent
@@ -125,7 +167,7 @@ def _manual() -> dict:
         weights=[w for _, _, w in _OS_POOL],
     )[0]
 
-    w, h = random.choice(_RESOLUTIONS)
+    w, h = _pick_resolution()
     locale, timezone = random.choice(_LOCALES)
     ff_ver = random.choice(_FF_VERSIONS)
     ua = _build_ua(os_name, ff_ver)

@@ -67,6 +67,7 @@ def bezier_click(page, locator) -> None:
     Falls back to a plain .click() if the bounding box is unavailable.
     """
     try:
+        locator.scroll_into_view_if_needed(timeout=2_000)
         box = locator.bounding_box(timeout=2_000)
         if not box:
             raise ValueError("bounding_box returned None")
